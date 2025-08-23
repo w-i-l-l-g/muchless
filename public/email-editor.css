@@ -1,0 +1,55 @@
+.checkmark-btn {
+    width: 40px;
+    height: 40px;
+    border: 2px solid #333;
+    background: white;
+    font-size: 20px;
+    font-weight: bold;
+    cursor: pointer;
+    border-radius: 4px;
+    margin-top: 5px;
+}
+
+.checkmark-btn:active {
+    background: #eee;
+}
+
+.send-popup {
+    display: none;
+    position: fixed;
+    right: 60px;
+    top: 144px;
+    background: white;
+    border: 2px solid #333;
+    border-radius: 4px;
+    padding: 15px;
+    z-index: 100;
+    box-shadow: -2px 2px 5px rgba(0,0,0,0.2);
+    min-width: 250px;
+    max-width: 300px;
+}
+
+.send-popup::after {
+    content: '';
+    position: absolute;
+    right: -12px;
+    top: 40px;
+    border-width: 10px 0 10px 12px;
+    border-style: solid;
+    border-color: transparent transparent transparent #333;
+}
+
+.send-popup p {
+    margin: 0 0 10px 0;
+    white-space: nowrap;
+}
+
+.send-btn {
+    padding: 8px 16px;
+    background: white;
+    border: 1px solid #333;
+    cursor: pointer;
+    font-size: 14px;
+    width: 100%;
+    text-align: center;
+}
