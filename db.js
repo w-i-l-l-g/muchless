@@ -161,11 +161,47 @@ async function getUserNotes(username) {
   }
 }
 
+async function updateNote(username, noteId, content) {
+  try {
+    console.log('Updating note:', noteId, 'for user:', username);
+    const db = await connectToDatabase();
+    const notes = db.collection('notes');
+    
+    // Update the note content and updatedAt timestamp
+    const result = await notes.updateOne(
+      { 
+        _id: new ObjectId(noteId), 
+        username: username 
+      },
+      { 
+        $set: { 
+          content: content,
+          updatedAt: new Date()
+        }
+      }
+    );
+    
+    if (result.matchedCount === 0) {
+      return { success: false, message: 'Note not found or access denied' };
+    }
+    
+    if (result.modifiedCount === 0) {
+      return { success: true, message: 'Note content unchanged' };
+    }
+    
+    return { success: true, message: 'Note updated successfully' };
+  } catch (error) {
+    console.error('Error updating note:', error);
+    return { success: false, message: 'Error updating note' };
+  }
+}
+
 module.exports = {
   connectToDatabase,
   saveUser,
   createNote,
   getUserNotes,
+  updateNote,
   // Add index for faster lookups
   async createIndexes() {
     try {

@@ -152,6 +152,40 @@ app.get('/api/notes', requireAuth, async (req, res) => {
   }
 });
 
+app.put('/api/notes/:id', requireAuth, async (req, res) => {
+  try {
+    const { content } = req.body;
+    const noteId = req.params.id;
+    
+    console.log('Updating note:', noteId, 'for user:', req.session.username);
+    
+    const { updateNote } = require('./db');
+    const result = await updateNote(req.session.username, noteId, content);
+    
+    if (result.success) {
+      return res.json(result);
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: result.message || 'Failed to update note',
+        details: result.details
+      });
+    }
+  } catch (error) {
+    console.error('Error in /api/notes PUT:', {
+      error: error.message,
+      stack: error.stack,
+      noteId: req.params.id,
+      session: req.session
+    });
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Error updating note',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
 // Routes
 app.get('/home', requireAuth, (req, res) => {
   res.send(`
@@ -1839,7 +1873,7 @@ app.get('/note/:id', requireAuth, (req, res) => {
 </head>
 <body>
     <div class="controls">
-        <a href="/home" class="btn" style="text-decoration: none; color: black; display: flex; align-items: center; justify-content: center; padding: 0;">⌂</a>
+        <a href="/notes" class="btn" style="text-decoration: none; color: black; display: flex; align-items: center; justify-content: center; padding: 0;">←</a>
         <button class="btn" onclick="changeFontSize(3)">+</button>
         <button class="btn" onclick="changeFontSize(-3)">-</button>
         <button class="btn" onclick="hideKeyboard()">⌨</button>
@@ -1888,16 +1922,39 @@ app.get('/note/:id', requireAuth, (req, res) => {
         }
         
         // Track last save and keystroke times
-        let lastSaveTime = 0;
+        let lastLocalSaveTime = 0;
+        let lastDbSaveTime = 0;
         let lastKeystrokeTime = 0;
         
-        // Auto-save interval (every 15 seconds)
+        // Auto-save to localStorage interval (every 15 seconds)
         setInterval(function() {
-            if (lastKeystrokeTime > lastSaveTime) {
+            if (lastKeystrokeTime > lastLocalSaveTime) {
                 localStorage.setItem(contentKey, textarea.value);
-                lastSaveTime = Date.now();
+                lastLocalSaveTime = Date.now();
             }
         }, 15000);
+        
+        // Auto-save to database interval (every 30 seconds)
+        setInterval(function() {
+            if (lastKeystrokeTime > lastDbSaveTime) {
+                fetch('/api/notes/' + NOTE_ID, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        content: textarea.value
+                    })
+                }).then(response => {
+                    if (response.ok) {
+                        lastDbSaveTime = Date.now();
+                        console.log('Note saved to database');
+                    }
+                }).catch(error => {
+                    console.error('Error saving to database:', error);
+                });
+            }
+        }, 30000);
         
         // Track keystrokes but don't save immediately
         textarea.addEventListener('input', function() {
