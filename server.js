@@ -1,8 +1,10 @@
 const express = require('express');
 const session = require('express-session');
+const cors = require('cors');
 const FileStore = require('session-file-store')(session);
 const cookieParser = require('cookie-parser');
 const path = require('path');
+const { saveUser, createNote, getUserNotes } = require('./db');
 const CognitoAuth = require('./cognito');
 require('dotenv').config();
 
@@ -10,6 +12,12 @@ const cognitoAuth = new CognitoAuth();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Enable CORS for all routes
+app.use(cors({
+  origin: ['http://localhost:3001', 'http://127.0.0.1:3001'],
+  credentials: true
+}));
 
 // Middleware
 app.use(express.urlencoded({ extended: true }));
@@ -44,6 +52,105 @@ function requireAuth(req, res, next) {
     return res.redirect('/login');
   }
 }
+
+// Debug route to check database state
+app.get('/debug/db', async (req, res) => {
+  try {
+    const db = require('./db');
+    const database = await db.connectToDatabase();
+    const collections = await database.listCollections().toArray();
+    
+    // Get counts for each collection
+    const stats = {};
+    for (const collection of collections) {
+      const coll = database.collection(collection.name);
+      stats[collection.name] = await coll.countDocuments();
+    }
+    
+    res.json({
+      success: true,
+      collections: collections.map(c => c.name),
+      stats
+    });
+  } catch (error) {
+    console.error('Debug error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// API Routes
+app.post('/api/notes', requireAuth, async (req, res) => {
+  try {
+    console.log('Received note creation request:', {
+      username: req.session.username,
+      body: req.body,
+      headers: req.headers,
+      session: req.session
+    });
+
+    const { name } = req.body;
+    if (!name || typeof name !== 'string' || name.trim() === '') {
+      const error = 'Note name is required';
+      console.error('Validation error:', error);
+      return res.status(400).json({ success: false, message: error });
+    }
+
+    const result = await createNote(req.session.username, name.trim());
+    console.log('Note creation result:', result);
+    
+    if (result.success) {
+      return res.json(result);
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: result.message || 'Failed to create note',
+        details: result.details
+      });
+    }
+  } catch (error) {
+    console.error('Error in /api/notes:', {
+      error: error.message,
+      stack: error.stack,
+      body: req.body,
+      session: req.session
+    });
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+app.get('/api/notes', requireAuth, async (req, res) => {
+  try {
+    console.log('Fetching notes for user:', req.session.username);
+    const result = await getUserNotes(req.session.username);
+    
+    if (result.success) {
+      console.log(`Found ${result.notes ? result.notes.length : 0} notes for user`);
+      return res.json(result);
+    } else {
+      console.error('Error fetching notes:', result.message);
+      return res.status(400).json({
+        success: false,
+        message: result.message || 'Failed to fetch notes',
+        details: result.details
+      });
+    }
+  } catch (error) {
+    console.error('Error in /api/notes GET:', {
+      error: error.message,
+      stack: error.stack,
+      session: req.session
+    });
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Error retrieving notes',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 
 // Routes
 app.get('/home', requireAuth, (req, res) => {
@@ -420,14 +527,23 @@ app.post('/signup', async (req, res) => {
   }
 
   try {
-    const result = await cognitoAuth.signUp(username, password, email);
+    // First create Cognito user
+    const cognitoResult = await cognitoAuth.signUp(username, password, email);
     
-    if (result.success) {
+    if (cognitoResult.success) {
+      // Only save to MongoDB after successful Cognito signup
+      const dbResult = await saveUser(username, email);
+      
+      if (!dbResult.success) {
+        console.error('Failed to save user to database after Cognito signup:', dbResult.message);
+        // Continue anyway since Cognito signup was successful
+      }
+      
       // Preserve the returnTo URL for after login
       const returnToParam = req.session.returnTo ? '&returnTo=' + encodeURIComponent(req.session.returnTo) : '';
       res.redirect('/login?message=Account created successfully. Please login.' + returnToParam);
     } else {
-      res.redirect('/signup?error=' + encodeURIComponent(result.error) + 
+      res.redirect('/signup?error=' + encodeURIComponent(cognitoResult.error) + 
                    '&username=' + encodeURIComponent(username) + 
                    '&email=' + encodeURIComponent(email));
     }
@@ -501,6 +617,9 @@ app.get('/letterbox', requireAuth, (req, res) => {
       border-radius: 15px;
       cursor: pointer;
       font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     
     .email-list {
@@ -548,17 +667,11 @@ app.get('/letterbox', requireAuth, (req, res) => {
       cursor: default;
     }
     
-    .home-link {
-      display: block;
-      text-align: center;
-      margin-top: 20px;
-      color: #333;
-      text-decoration: underline;
-    }
   </style>
 </head>
 <body>
   <div class="header">
+    <a href="/home" class="btn" style="text-decoration: none; color: black; display: flex; align-items: center; justify-content: center; padding: 0 12px; margin-right: auto;">⌂</a>
     <button class="btn" id="draftsBtn">Drafts</button>
     <button class="btn" id="composeBtn">Compose</button>
   </div>
@@ -578,7 +691,6 @@ app.get('/letterbox', requireAuth, (req, res) => {
     <button id="nextPage">Next</button>
   </div>
   
-  <a href="/home" class="home-link">Back to Home</a>
   
   <script>
     // Simple pagination
@@ -857,13 +969,17 @@ app.get('/compose/editor', requireAuth, (req, res) => {
     <script>
         let fontSize = 19;
         const textarea = document.getElementById('notes');
+        // Per-note storage keys based on route param
+        const NOTE_ID = ${JSON.stringify(typeof req.params.id === 'string' ? req.params.id : '')};
+        const contentKey = 'note:' + NOTE_ID + ':content';
+        const fontKey = 'note:' + NOTE_ID + ':fontSize';
         
         function changeFontSize(delta) {
             fontSize += delta;
             if (fontSize < 8) fontSize = 8;
             if (fontSize > 48) fontSize = 48;
             textarea.style.fontSize = fontSize + 'px';
-            localStorage.setItem('fontSize', fontSize);
+            localStorage.setItem(fontKey, fontSize);
         }
         
         function hideKeyboard() {
@@ -954,6 +1070,320 @@ app.get('/compose/editor', requireAuth, (req, res) => {
         sendPopup.addEventListener('click', function(event) {
             event.stopPropagation();
         });
+    </script>
+</body>
+</html>`);
+});
+
+app.get('/notes', requireAuth, (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notes</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 10px;
+            font-family: serif;
+            background: white;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .btn {
+            background: white;
+            border: 2px solid #333;
+            font-size: 20px;
+            padding: 5px 15px;
+            cursor: pointer;
+            text-decoration: none;
+            color: black;
+        }
+        .popup-overlay {
+            display: none;
+            position: fixed;
+            top: 20%;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: transparent;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            z-index: 1000;
+            padding-top: 20px;
+        }
+        .popup {
+            background: white;
+            padding: 20px;
+            width: 80%;
+            max-width: 400px;
+            position: relative;
+            border: 2px solid #333;
+        }
+        .popup-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .popup-close {
+            background: none;
+            border: none;
+            font-size: 32px;
+            cursor: pointer;
+            padding: 10px 15px 10px 10px;
+            position: absolute;
+            top: 0;
+            right: 0;
+            line-height: 1;
+        }
+        .popup-content {
+            margin-bottom: 20px;
+        }
+        .popup-actions {
+            display: flex;
+            justify-content: flex-end;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        .form-group input[type="text"] {
+            width: 100%;
+            padding: 8px 12px 8px 8px;
+            font-size: 16px;
+            border: 1px solid #333;
+            font-family: serif;
+            box-sizing: border-box;
+        }
+        
+        .notes-list {
+            margin-top: 20px;
+        }
+        
+        .note-item {
+            padding: 15px;
+            border: 1px solid #333;
+            margin-bottom: 10px;
+            cursor: pointer;
+        }
+        
+        .note-name {
+            font-size: 18px;
+            margin-bottom: 5px;
+        }
+        
+        .note-date {
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .no-notes {
+            text-align: center;
+            margin-top: 40px;
+            color: #666;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <a href="/home" class="btn">⌂</a>
+        <button class="btn" id="addNoteBtn">+</button>
+    </div>
+    
+    <div class="notes-list" id="notesList">
+        <!-- Notes will be loaded here -->
+    </div>
+
+    <div class="popup-overlay" id="addNotePopup" style="display: none;">
+        <div class="popup">
+            <div class="popup-header">
+                <h2>New Note</h2>
+                <button class="popup-close" id="closePopup" aria-label="Close">×</button>
+            </div>
+            <div class="popup-content">
+                <div class="form-group">
+                    <label for="noteName">Name:</label>
+                    <input type="text" id="noteName" placeholder="Enter note name">
+                </div>
+            </div>
+            <div class="popup-actions">
+                <button class="btn" id="createNoteBtn">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const addNoteBtn = document.getElementById('addNoteBtn');
+        const closePopup = document.getElementById('closePopup');
+        const addNotePopup = document.getElementById('addNotePopup');
+        const createNoteBtn = document.getElementById('createNoteBtn');
+        const noteNameInput = document.getElementById('noteName');
+
+        addNoteBtn.addEventListener('click', () => {
+            addNotePopup.style.display = 'flex';
+        });
+
+        closePopup.addEventListener('click', () => {
+            addNotePopup.style.display = 'none';
+        });
+
+        createNoteBtn.addEventListener('click', async () => {
+            const noteName = noteNameInput.value.trim();
+            if (noteName) {
+                try {
+                    const apiBaseUrl = '${process.env.API_BASE_URL || 'http://localhost:3001'}';
+                    const response = await fetch(apiBaseUrl + '/api/notes', {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json'
+                        },
+                        body: JSON.stringify({ name: noteName })
+                    });
+                    
+                    if (!response.ok) {
+                        const error = await response.json().catch(() => ({}));
+                        throw new Error(error.message || 'HTTP error! status: ' + response.status);
+                    }
+                    
+                    const result = await response.json();
+                    
+                    if (!result.success) {
+                        throw new Error(result.message || 'Failed to create note');
+                    }
+                    
+                    // Success - reload to show the new note
+                    window.location.reload();
+                    
+                } catch (error) {
+                    console.error('Error creating note:', error);
+                    
+                    // Show error in the popup instead of alert
+                    const errorElement = document.createElement('div');
+                    errorElement.className = 'error-message';
+                    errorElement.textContent = error.message || 'Failed to create note. Please try again.';
+                    
+                    const popupContent = addNotePopup.querySelector('.popup-content');
+                    const existingError = popupContent.querySelector('.error-message');
+                    if (existingError) {
+                        popupContent.removeChild(existingError);
+                    }
+                    popupContent.insertBefore(errorElement, popupContent.firstChild);
+                    
+                    // Don't close the popup on error so user can try again
+                    return;
+                } finally {
+                    // Only close on success (handled by the reload)
+                    // Keep open on error to show the error message
+                    if (addNotePopup.style.display !== 'none') {
+                        addNotePopup.style.display = 'none';
+                        noteNameInput.value = '';
+                    }
+                }
+            }
+        });
+
+        // Close popup when clicking outside
+        addNotePopup.addEventListener('click', (e) => {
+            if (e.target === addNotePopup) {
+                addNotePopup.style.display = 'none';
+            }
+        });
+
+        // Close popup with Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && addNotePopup.style.display === 'flex') {
+                addNotePopup.style.display = 'none';
+            }
+        });
+
+        // Load notes when page loads
+        async function loadNotes() {
+            const notesList = document.getElementById('notesList');
+            const loadingIndicator = document.createElement('div');
+            loadingIndicator.className = 'loading';
+            loadingIndicator.textContent = 'Loading notes...';
+            notesList.innerHTML = '';
+            notesList.appendChild(loadingIndicator);
+            
+            try {
+                const apiBaseUrl = '${process.env.API_BASE_URL || 'http://localhost:3001'}';
+                const response = await fetch(apiBaseUrl + '/api/notes', {
+                    credentials: 'include',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Cache-Control': 'no-cache'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error('HTTP error! status: ' + response.status);
+                }
+                
+                const result = await response.json();
+                
+                if (!result.success) {
+                    throw new Error(result.message || 'Failed to load notes');
+                }
+                
+                if (!result.notes || result.notes.length === 0) {
+                    notesList.innerHTML = [
+                        '<div class="no-notes">',
+                            '<p>No notes yet.</p>',
+                            '<p>Click + to create your first note.</p>',
+                        '</div>'
+                    ].join('');
+                    return;
+                }
+                
+                notesList.innerHTML = result.notes.map(function(note) {
+                    return [
+                        '<div class="note-item" data-note-id="', note._id, '">',
+                            '<div class="note-name">', (note.name || 'Untitled Note'), '</div>',
+                            '<div class="note-date">', (note.createdAt ? new Date(note.createdAt).toLocaleDateString() : ''), '</div>',
+                        '</div>'
+                    ].join('');
+                }).join('');
+                
+                // Add click handlers to each note
+                var noteItems = document.querySelectorAll('.note-item');
+                for (var i = 0; i < noteItems.length; i++) {
+                    (function() {
+                        var item = noteItems[i];
+                        item.addEventListener('click', function() {
+                            var noteId = item.getAttribute('data-note-id');
+                            if (noteId) {
+                                window.location.href = '/note/' + encodeURIComponent(noteId);
+                            }
+                        });
+                    })();
+                }
+                
+            } catch (error) {
+                console.error('Error loading notes:', error);
+                notesList.innerHTML = [
+                    '<div class="error">',
+                        '<p>Error loading notes</p>',
+                        '<p>', (error.message || 'Please try again later'), '</p>',
+                        '<button onclick="window.location.reload()" class="retry-btn">Retry</button>',
+                    '</div>'
+                ].join('');
+            }
+        }
+        
+        // Initial load of notes
+        loadNotes();
     </script>
 </body>
 </html>`);
@@ -1095,7 +1525,7 @@ app.get('/jotpad', requireAuth, (req, res) => {
         function snapToKeyboard() {
             const cursorPosition = textarea.selectionStart;
             const textBeforeCursor = textarea.value.substring(0, cursorPosition);
-            const lines = textBeforeCursor.split('\\n');
+            const lines = textBeforeCursor.split(/\\n/);
             const currentLine = lines.length;
             
             // Calculate how much space we need above to position cursor line at bottom
@@ -1134,7 +1564,380 @@ app.get('/jotpad', requireAuth, (req, res) => {
 </html>`);
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log('Note: AWS Cognito integration needs to be configured');
+app.get('/jotpad', requireAuth, (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notes</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: serif;
+            background: white;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        .controls {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .btn {
+            width: 40px;
+            height: 40px;
+            border: 2px solid #333;
+            background: white;
+            font-size: 20px;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        
+        .btn:active {
+            background: #eee;
+        }
+        
+        #notes {
+            width: 100%;
+            height: 100vh;
+            border: none;
+            outline: none;
+            padding: 20px;
+            padding-bottom: 100vh; /* Add space so first lines can scroll */
+            font-size: 16px;
+            font-family: serif;
+            line-height: 1.4;
+            resize: none;
+            background: white;
+        }
+        
+        .comma-btn {
+            position: fixed;
+            right: 10px;
+            bottom: 0px;
+            width: 50px;
+            height: 40px;
+            border: 2px solid #333;
+            background: white;
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 4px;
+            z-index: 10;
+        }
+        
+        .comma-btn:active {
+            background: #eee;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <a href="/home" class="btn" style="text-decoration: none; color: black; display: flex; align-items: center; justify-content: center; padding: 0;">⌂</a>
+        <button class="btn" onclick="changeFontSize(3)">+</button>
+        <button class="btn" onclick="changeFontSize(-3)">-</button>
+        <button class="btn" onclick="hideKeyboard()">⌨</button>
+    </div>
+    
+    <textarea id="notes" placeholder="Start typing your notes..."></textarea>
+    
+    <button id="commaBtn" class="comma-btn" onclick="insertComma()" style="display: none;">,</button>
+    
+    <script>
+        let fontSize = 19;
+        const textarea = document.getElementById('notes');
+        
+        function changeFontSize(delta) {
+            fontSize += delta;
+            if (fontSize < 8) fontSize = 8;
+            if (fontSize > 48) fontSize = 48;
+            textarea.style.fontSize = fontSize + 'px';
+            localStorage.setItem('fontSize', fontSize);
+        }
+        
+        function hideKeyboard() {
+            textarea.blur(); // Remove focus to hide keyboard
+            textarea.style.marginTop = '0px'; // Clear any margin padding
+            document.getElementById('commaBtn').style.display = 'none'; // Hide comma button
+        }
+        
+        function insertComma() {
+            const cursorPos = textarea.selectionStart;
+            const textBefore = textarea.value.substring(0, cursorPos);
+            const textAfter = textarea.value.substring(cursorPos);
+            textarea.value = textBefore + ',' + textAfter;
+            textarea.setSelectionRange(cursorPos + 1, cursorPos + 1); // Move cursor after comma
+            textarea.focus(); // Keep focus on textarea
+            localStorage.setItem('notes', textarea.value); // Save to localStorage
+        }
+        
+        function showCommaButton() {
+            document.getElementById('commaBtn').style.display = 'block';
+        }
+        
+        // Auto-save to localStorage
+        textarea.addEventListener('input', function() {
+            localStorage.setItem('notes', this.value);
+            snapToKeyboard();
+            showCommaButton(); // Show comma button after first keystroke
+        });
+        
+        
+        // Simple: snap cursor line to bottom of viewport when typing
+        function snapToKeyboard() {
+            const cursorPosition = textarea.selectionStart;
+            const textBeforeCursor = textarea.value.substring(0, cursorPosition);
+            const lines = textBeforeCursor.split(/\\n/);
+            const currentLine = lines.length;
+            
+            // Calculate how much space we need above to position cursor line at bottom
+            const lineHeight = parseInt(getComputedStyle(textarea).lineHeight);
+            const linesNeededToFillScreen = Math.ceil(window.innerHeight / lineHeight);
+            
+            if (currentLine < linesNeededToFillScreen) {
+                // Add margin-top to push content down so cursor line appears at bottom
+                const marginNeeded = window.innerHeight - (currentLine * lineHeight);
+                textarea.style.marginTop = Math.max(0, marginNeeded) + 'px';
+            } else {
+                // Remove margin and use normal scrolling for longer content
+                textarea.style.marginTop = '0px';
+                const cursorY = (currentLine - 1) * lineHeight + 20;
+                const targetY = cursorY - window.innerHeight + lineHeight;
+                textarea.scrollTop = targetY;
+            }
+        }
+        
+        // Load saved notes and font size
+        const saved = localStorage.getItem('notes');
+        if (saved) {
+            textarea.value = saved;
+        }
+        
+        const savedFontSize = localStorage.getItem('fontSize');
+        if (savedFontSize) {
+            fontSize = parseInt(savedFontSize);
+            textarea.style.fontSize = fontSize + 'px';
+        }
+        
+        // Focus the textarea on load
+        textarea.focus();
+    </script>
+</body>
+</html>`);
 });
+
+// Initialize database indexes and start server
+async function startServer() {
+  try {
+    // Initialize database indexes
+    const db = require('./db');
+    await db.createIndexes();
+    
+    // Start the server
+    app.listen(PORT, () => {
+      console.log(`Server is running on http://localhost:${PORT}`);
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+}
+
+// Note editor page (copy of /jotpad functionality)
+app.get('/note/:id', requireAuth, (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notes</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: serif;
+            background: white;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        .controls {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .btn {
+            width: 40px;
+            height: 40px;
+            border: 2px solid #333;
+            background: white;
+            font-size: 20px;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        
+        .btn:active {
+            background: #eee;
+        }
+        
+        #notes {
+            width: 100%;
+            height: 100vh;
+            border: none;
+            outline: none;
+            padding: 20px;
+            padding-bottom: 100vh; /* Add space so first lines can scroll */
+            font-size: 16px;
+            font-family: serif;
+            line-height: 1.4;
+            resize: none;
+            background: white;
+        }
+        
+        .comma-btn {
+            position: fixed;
+            right: 10px;
+            bottom: 0px;
+            width: 50px;
+            height: 40px;
+            border: 2px solid #333;
+            background: white;
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 4px;
+            z-index: 10;
+        }
+        
+        .comma-btn:active {
+            background: #eee;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <a href="/home" class="btn" style="text-decoration: none; color: black; display: flex; align-items: center; justify-content: center; padding: 0;">⌂</a>
+        <button class="btn" onclick="changeFontSize(3)">+</button>
+        <button class="btn" onclick="changeFontSize(-3)">-</button>
+        <button class="btn" onclick="hideKeyboard()">⌨</button>
+    </div>
+    
+    <textarea id="notes" placeholder="Start typing your notes..."></textarea>
+    
+    <button id="commaBtn" class="comma-btn" onclick="insertComma()" style="display: none;">,</button>
+    
+    <script>
+        let fontSize = 19;
+        const textarea = document.getElementById('notes');
+        // Per-note storage keys based on route param
+        const NOTE_ID = '${req.params.id.replace(/'/g, "\\'")}';
+        console.log('Note ID:', NOTE_ID);
+        console.log('Content key:', 'note:' + NOTE_ID + ':content');
+        const contentKey = 'note:' + NOTE_ID + ':content';
+        const fontKey = 'note:' + NOTE_ID + ':fontSize';
+        
+        function changeFontSize(delta) {
+            fontSize += delta;
+            if (fontSize < 8) fontSize = 8;
+            if (fontSize > 48) fontSize = 48;
+            textarea.style.fontSize = fontSize + 'px';
+            localStorage.setItem(fontKey, fontSize);
+        }
+        
+        function hideKeyboard() {
+            textarea.blur(); // Remove focus to hide keyboard
+            textarea.style.marginTop = '0px'; // Clear any margin padding
+            document.getElementById('commaBtn').style.display = 'none'; // Hide comma button
+        }
+        
+        function insertComma() {
+            const cursorPos = textarea.selectionStart;
+            const textBefore = textarea.value.substring(0, cursorPos);
+            const textAfter = textarea.value.substring(cursorPos);
+            textarea.value = textBefore + ',' + textAfter;
+            textarea.setSelectionRange(cursorPos + 1, cursorPos + 1); // Move cursor after comma
+            textarea.focus(); // Keep focus on textarea
+            localStorage.setItem(contentKey, textarea.value); // Save to localStorage
+        }
+        
+        function showCommaButton() {
+            document.getElementById('commaBtn').style.display = 'block';
+        }
+        
+        // Auto-save to localStorage
+        textarea.addEventListener('input', function() {
+            localStorage.setItem(contentKey, this.value);
+            snapToKeyboard();
+            showCommaButton(); // Show comma button after first keystroke
+        });
+        
+        
+        // Simple: snap cursor line to bottom of viewport when typing
+        function snapToKeyboard() {
+            const cursorPosition = textarea.selectionStart;
+            const textBeforeCursor = textarea.value.substring(0, cursorPosition);
+            const lines = textBeforeCursor.split(/\\n/);
+            const currentLine = lines.length;
+            
+            // Calculate how much space we need above to position cursor line at bottom
+            const lineHeight = parseInt(getComputedStyle(textarea).lineHeight);
+            const linesNeededToFillScreen = Math.ceil(window.innerHeight / lineHeight);
+            
+            if (currentLine < linesNeededToFillScreen) {
+                // Add margin-top to push content down so cursor line appears at bottom
+                const marginNeeded = window.innerHeight - (currentLine * lineHeight);
+                textarea.style.marginTop = Math.max(0, marginNeeded) + 'px';
+            } else {
+                // Remove margin and use normal scrolling for longer content
+                textarea.style.marginTop = '0px';
+                const cursorY = (currentLine - 1) * lineHeight + 20;
+                const targetY = cursorY - window.innerHeight + lineHeight;
+                textarea.scrollTop = targetY;
+            }
+        }
+        
+        // Load saved notes and font size
+        const saved = localStorage.getItem(contentKey);
+        if (saved) {
+            textarea.value = saved;
+        }
+        
+        const savedFontSize = localStorage.getItem(fontKey);
+        if (savedFontSize) {
+            fontSize = parseInt(savedFontSize);
+            textarea.style.fontSize = fontSize + 'px';
+        }
+        
+        // Focus the textarea on load
+        textarea.focus();
+    </script>
+</body>
+</html>`);
+});
+
+startServer();
+
+console.log('Note: AWS Cognito integration needs to be configured');
