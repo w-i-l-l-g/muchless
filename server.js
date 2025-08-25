@@ -1887,9 +1887,21 @@ app.get('/note/:id', requireAuth, (req, res) => {
             document.getElementById('commaBtn').style.display = 'block';
         }
         
-        // Auto-save to localStorage
+        // Track last save and keystroke times
+        let lastSaveTime = 0;
+        let lastKeystrokeTime = 0;
+        
+        // Auto-save interval (every 15 seconds)
+        setInterval(function() {
+            if (lastKeystrokeTime > lastSaveTime) {
+                localStorage.setItem(contentKey, textarea.value);
+                lastSaveTime = Date.now();
+            }
+        }, 15000);
+        
+        // Track keystrokes but don't save immediately
         textarea.addEventListener('input', function() {
-            localStorage.setItem(contentKey, this.value);
+            lastKeystrokeTime = Date.now();
             snapToKeyboard();
             showCommaButton(); // Show comma button after first keystroke
         });
