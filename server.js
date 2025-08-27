@@ -2448,6 +2448,7 @@ app.get('/note/:id', requireAuth, (req, res) => {
         console.log('Note ID:', NOTE_ID);
         console.log('Content key:', 'note:' + NOTE_ID + ':content');
         const contentKey = 'note:' + NOTE_ID + ':content';
+        const localTimestampKey = 'note:' + NOTE_ID + ':timestamp';
         const fontKey = 'note:' + NOTE_ID + ':fontSize';
         
         function changeFontSize(delta) {
@@ -2478,47 +2479,131 @@ app.get('/note/:id', requireAuth, (req, res) => {
             document.getElementById('commaBtn').style.display = 'block';
         }
         
-        // Track last save and keystroke times
-        let lastLocalSaveTime = 0;
-        let lastDbSaveTime = 0;
-        let lastKeystrokeTime = 0;
+        // Save timeout variable for debounced save
+        let saveTimeout = null;
         
-        // Auto-save to localStorage interval (every 15 seconds)
-        setInterval(function() {
-            if (lastKeystrokeTime > lastLocalSaveTime) {
-                localStorage.setItem(contentKey, textarea.value);
-                lastLocalSaveTime = Date.now();
+        // Function to save to database - used both by debounced save and sync operations
+        function saveToDatabase(content) {
+            // Try to save to database with fetch API first
+            try {
+                // Try modern fetch API first
+                if (window.fetch) {
+                    fetch('/api/notes/' + NOTE_ID, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            content: content
+                        })
+                    }).then(response => {
+                        if (response.ok) {
+                            console.log('Note saved to database via fetch');
+                            // Update timestamp for this successful save
+                            const now = Date.now();
+                            localStorage.setItem(localTimestampKey, now);
+                        }
+                    }).catch(error => {
+                        console.error('Fetch error, trying XMLHttpRequest fallback:', error);
+                        saveWithXhr(content);
+                    });
+                } else {
+                    // Fallback to XMLHttpRequest for Kindle browser
+                    saveWithXhr(content);
+                }
+            } catch (error) {
+                console.error('Error in saveToDatabase:', error);
+                // Try XMLHttpRequest as fallback
+                saveWithXhr(content);
             }
-        }, 15000);
+        }
         
-        // Auto-save to database interval (every 30 seconds)
-        setInterval(function() {
-            if (lastKeystrokeTime > lastDbSaveTime) {
-                fetch('/api/notes/' + NOTE_ID, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        content: textarea.value
-                    })
-                }).then(response => {
-                    if (response.ok) {
-                        lastDbSaveTime = Date.now();
-                        console.log('Note saved to database');
+        // Combined save function for user edits
+        function saveNote() {
+            // Save to localStorage with timestamp
+            const now = Date.now();
+            localStorage.setItem(contentKey, textarea.value);
+            localStorage.setItem(localTimestampKey, now);
+            
+            // Save to database
+            saveToDatabase(textarea.value);
+        }
+        
+        // Fallback save function using XMLHttpRequest
+        function saveWithXhr(content) {
+            // Use provided content or textarea value if not provided
+            const noteContent = content || textarea.value;
+            
+            try {
+                const xhr = new XMLHttpRequest();
+                xhr.open('PUT', '/api/notes/' + NOTE_ID);
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                
+                xhr.onreadystatechange = function() {
+                    if (this.readyState === 4) {
+                        if (this.status === 200) {
+                            try {
+                                const response = JSON.parse(this.responseText);
+                                if (response.success) {
+                                    console.log('Note saved to database via XMLHttpRequest');
+                                    // Update timestamp for this successful save
+                                    const now = Date.now();
+                                    localStorage.setItem(localTimestampKey, now);
+                                }
+                            } catch (e) {
+                                console.error('Failed to parse response:', e);
+                            }
+                        } else {
+                            console.error('Request failed with status:', this.status);
+                        }
                     }
-                }).catch(error => {
-                    console.error('Error saving to database:', error);
-                });
+                };
+                
+                xhr.onerror = function() {
+                    console.error('Network error occurred in XMLHttpRequest');
+                };
+                
+                xhr.send(JSON.stringify({
+                    content: noteContent
+                }));
+            } catch (error) {
+                console.error('Error in XMLHttpRequest setup:', error);
             }
-        }, 30000);
+        }
         
-        // Track keystrokes but don't save immediately
+        // Handle input with debounced save
         textarea.addEventListener('input', function() {
-            lastKeystrokeTime = Date.now();
+            // Clear existing timeout
+            if (saveTimeout) clearTimeout(saveTimeout);
+            
+            // Set new timeout for 1 second
+            // This will handle both localStorage and database saves
+            saveTimeout = setTimeout(() => saveNote(), 1000);
+            
+            // Update UI
             snapToKeyboard();
             showCommaButton(); // Show comma button after first keystroke
         });
+        
+        // Add online/offline detection
+        window.addEventListener('online', function() {
+            console.log('Browser is now online - syncing data');
+            syncOfflineChanges();
+        });
+        
+        window.addEventListener('offline', function() {
+            console.log('Browser is now offline - will sync later');
+        });
+        
+        // Function to sync offline changes when back online
+        function syncOfflineChanges() {
+            // Only sync if we have content and it was changed while offline
+            const content = localStorage.getItem(contentKey);
+            if (content) {
+                console.log('Syncing offline changes to database');
+                saveToDatabase(content);
+            }
+        }
         
         
         // Simple: snap cursor line to bottom of viewport when typing
@@ -2545,31 +2630,71 @@ app.get('/note/:id', requireAuth, (req, res) => {
             }
         }
         
-        // Function to load note from database and fall back to localStorage
+        // Function to load note from database and localStorage, comparing timestamps
         async function loadNoteContent() {
+            let dbContent = null;
+            let dbTimestamp = null;
+            let localContent = null;
+            let localTimestamp = null;
+            
+            // Get localStorage data if available
+            localContent = localStorage.getItem(contentKey);
+            const localTimestampStr = localStorage.getItem(localTimestampKey);
+            if (localTimestampStr) {
+                localTimestamp = parseInt(localTimestampStr);
+                console.log('Local timestamp:', new Date(localTimestamp).toISOString());
+            }
+            
             try {
-                // First try to get from database
+                // Try to get from database
                 const response = await fetch('/api/notes/' + NOTE_ID);
                 if (response.ok) {
                     const data = await response.json();
-                    if (data.success && data.note && data.note.content) {
-                        textarea.value = data.note.content;
-                        console.log('Note loaded from database');
-                        // Also update localStorage with latest version
-                        localStorage.setItem(contentKey, data.note.content);
-                        return;
+                    if (data.success && data.note) {
+                        dbContent = data.note.content;
+                        // Use updatedAt from the database as timestamp
+                        if (data.note.updatedAt) {
+                            dbTimestamp = new Date(data.note.updatedAt).getTime();
+                            console.log('DB timestamp:', new Date(dbTimestamp).toISOString());
+                        }
                     }
                 }
-                console.log('Database note not available, falling back to localStorage');
             } catch (error) {
                 console.error('Error fetching note from database:', error);
             }
             
-            // Fallback to localStorage if database fetch fails
-            const saved = localStorage.getItem(contentKey);
-            if (saved) {
-                textarea.value = saved;
-                console.log('Note loaded from localStorage');
+            // Compare and decide which version to use
+            if (dbContent && localContent) {
+                // Both exist - use the more recent one
+                if (!dbTimestamp || !localTimestamp || localTimestamp > dbTimestamp) {
+                    console.log('Using localStorage version (newer)');
+                    textarea.value = localContent;
+                    // Sync the local version back to the database since it's newer
+                    saveToDatabase(localContent);
+                } else {
+                    console.log('Using database version (newer)');
+                    textarea.value = dbContent;
+                    // Update localStorage with the database version
+                    localStorage.setItem(contentKey, dbContent);
+                    localStorage.setItem(localTimestampKey, dbTimestamp);
+                }
+            } else if (dbContent) {
+                console.log('Using database version (no local version)');
+                textarea.value = dbContent;
+                // Store in localStorage
+                localStorage.setItem(contentKey, dbContent);
+                if (dbTimestamp) {
+                    localStorage.setItem(localTimestampKey, dbTimestamp);
+                }
+            } else if (localContent) {
+                console.log('Using localStorage version (offline mode)');
+                textarea.value = localContent;
+                // Will try to sync back to database when online
+                if (navigator.onLine) {
+                    saveToDatabase(localContent);
+                }
+            } else {
+                console.log('No saved content found');
             }
         }
         
