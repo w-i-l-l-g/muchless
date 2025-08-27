@@ -151,12 +151,19 @@ async function createNote(username, noteName) {
 async function getUserNotes(username) {
   try {
     const db = await connectToDatabase();
+    const users = db.collection('users');
     const notes = db.collection('notes');
     
-    // Use the original username for notes lookup since notes still use the original username
-    // This will need to be updated if we update all notes to also use username_lc
+    // Get user by username_lc for case-insensitive matching
+    const user = await users.findOne({ username_lc: username.toLowerCase() });
+    
+    if (!user) {
+      return { success: false, message: 'User not found' };
+    }
+    
+    // Use userId for notes lookup instead of raw username
     const userNotes = await notes.find(
-      { username },
+      { userId: user._id },
       { 
         sort: { createdAt: -1 },
         projection: { _id: 1, name: 1, createdAt: 1, updatedAt: 1 }
@@ -170,18 +177,56 @@ async function getUserNotes(username) {
   }
 }
 
+async function getNote(username, noteId) {
+  try {
+    console.log('Getting note:', noteId, 'for user:', username);
+    const db = await connectToDatabase();
+    const users = db.collection('users');
+    const notes = db.collection('notes');
+    
+    // Get user by username_lc for case-insensitive matching
+    const user = await users.findOne({ username_lc: username.toLowerCase() });
+    
+    if (!user) {
+      return { success: false, message: 'User not found' };
+    }
+    
+    // Use userId for note lookup instead of raw username
+    const note = await notes.findOne({
+      _id: new ObjectId(noteId),
+      userId: user._id
+    });
+    
+    if (!note) {
+      return { success: false, message: 'Note not found or access denied' };
+    }
+    
+    return { success: true, note };
+  } catch (error) {
+    console.error('Error retrieving note:', error);
+    return { success: false, message: 'Error retrieving note' };
+  }
+}
+
 async function updateNote(username, noteId, content) {
   try {
     console.log('Updating note:', noteId, 'for user:', username);
     const db = await connectToDatabase();
+    const users = db.collection('users');
     const notes = db.collection('notes');
     
-    // Update the note content and updatedAt timestamp
-    // Still using original username for notes lookup until we update note creation
+    // Get user by username_lc for case-insensitive matching
+    const user = await users.findOne({ username_lc: username.toLowerCase() });
+    
+    if (!user) {
+      return { success: false, message: 'User not found' };
+    }
+    
+    // Use userId for notes lookup instead of raw username
     const result = await notes.updateOne(
       { 
         _id: new ObjectId(noteId), 
-        username: username 
+        userId: user._id 
       },
       { 
         $set: { 
@@ -271,11 +316,20 @@ async function createLetter(fromUsername, toUsername, content, status = 'draft')
 async function getLettersByStatus(username, status) {
   try {
     const db = await connectToDatabase();
+    const users = db.collection('users');
     const letters = db.collection('letters');
     
+    // Get user by username_lc
+    const user = await users.findOne({ username_lc: username.toLowerCase() });
+    
+    if (!user) {
+      return { success: false, message: 'User not found' };
+    }
+    
+    // Use userId for querying
     const query = status === 'received' 
-      ? { toUsername: username, status: 'delivered' } 
-      : { fromUsername: username, status };
+      ? { toUserId: user._id, status: 'delivered' } 
+      : { fromUserId: user._id, status };
     
     const results = await letters.find(query).toArray();
     return { success: true, letters: results };
@@ -285,10 +339,60 @@ async function getLettersByStatus(username, status) {
   }
 }
 
+async function getDeliveredMail(username) {
+  try {
+    const db = await connectToDatabase();
+    const users = db.collection('users');
+    const letters = db.collection('letters');
+    const now = new Date();
+    
+    // Get user by username_lc
+    const user = await users.findOne({ username_lc: username.toLowerCase() });
+    
+    if (!user) {
+      return { success: false, message: 'User not found' };
+    }
+    
+    // Use userId for querying letters that need to be delivered
+    const queuedLetters = await letters.find({
+      toUserId: user._id,
+      status: 'queued',
+      deliveryDate: { $lte: now }
+    }).toArray();
+    
+    // Update status to delivered for any ready letters
+    for (const letter of queuedLetters) {
+      await letters.updateOne(
+        { _id: letter._id },
+        { $set: { status: 'delivered', deliveredAt: now } }
+      );
+    }
+    
+    // Then fetch all delivered letters using userId
+    const deliveredLetters = await letters.find({
+      toUserId: user._id,
+      status: 'delivered'
+    }).sort({ deliveredAt: -1 }).toArray();
+    
+    return { success: true, letters: deliveredLetters };
+  } catch (error) {
+    console.error('Error getting delivered mail:', error);
+    return { success: false, message: 'Database error' };
+  }
+}
+
 async function getLetter(letterId, username) {
   try {
     const db = await connectToDatabase();
+    const users = db.collection('users');
     const letters = db.collection('letters');
+    
+    // Get user by username_lc
+    const user = await users.findOne({ username_lc: username.toLowerCase() });
+    
+    if (!user) {
+      return { success: false, message: 'User not found' };
+    }
     
     const letter = await letters.findOne({ _id: new ObjectId(letterId) });
     
@@ -297,7 +401,7 @@ async function getLetter(letterId, username) {
     }
     
     // Access control - user must be sender or recipient
-    if (letter.fromUsername !== username && letter.toUsername !== username) {
+    if (!letter.fromUserId.equals(user._id) && !letter.toUserId.equals(user._id)) {
       return { success: false, message: 'Access denied' };
     }
     
@@ -310,18 +414,38 @@ async function getLetter(letterId, username) {
 
 async function updateLetter(letterId, username, updates) {
   try {
+    console.log('UPDATE REQUEST:', {username, letterId, updates});
     const db = await connectToDatabase();
+    const users = db.collection('users');
     const letters = db.collection('letters');
     
-    // Verify the letter exists and belongs to this user
+    // Get user by username_lc
+    const user = await users.findOne({ username_lc: username.toLowerCase() });
+    
+    if (!user) {
+      console.log('User not found:', username);
+      return { success: false, message: 'User not found' };
+    }
+    
+    // Find letter first to check if it exists
     const letter = await letters.findOne({
-      _id: new ObjectId(letterId),
-      fromUsername: username,
-      status: 'draft' // Can only update drafts
+      _id: new ObjectId(letterId)
     });
     
     if (!letter) {
+      console.log('Letter not found:', letterId);
       return { success: false, message: 'Letter not found or cannot be updated' };
+    }
+    
+    // Verify the user has permission to modify this letter using userId
+    if (!letter.fromUserId.equals(user._id)) {
+      console.log('Access denied: UserId mismatch', {
+        letterFromUserId: letter.fromUserId,
+        requestUserId: user._id,
+        letterFromUsername: letter.fromUsername,
+        requestUsername: username
+      });
+      return { success: false, message: 'Letter access denied - you are not the author' };
     }
     
     // Apply updates
@@ -342,14 +466,26 @@ async function updateLetter(letterId, username, updates) {
 async function deleteLetter(letterId, username) {
   try {
     const db = await connectToDatabase();
+    const users = db.collection('users');
     const letters = db.collection('letters');
     
-    // Verify the letter exists and belongs to this user
+    // Get user by username_lc
+    const user = await users.findOne({ username_lc: username.toLowerCase() });
+    
+    if (!user) {
+      return { success: false, message: 'User not found' };
+    }
+    
+    // Find letter by ID and draft status
     const letter = await letters.findOne({
       _id: new ObjectId(letterId),
-      fromUsername: username,
       status: 'draft' // Can only delete drafts
     });
+    
+    // Check if user is the author using userId
+    if (letter && !letter.fromUserId.equals(user._id)) {
+      return { success: false, message: 'Letter access denied - you are not the author' };
+    }
     
     if (!letter) {
       return { success: false, message: 'Letter not found or cannot be deleted' };
@@ -369,12 +505,14 @@ module.exports = {
   saveUser,
   createNote,
   getUserNotes,
+  getNote,
   updateNote,
   checkUserExists,
   
   // Letter functions
   createLetter,
   getLettersByStatus,
+  getDeliveredMail,
   getLetter,
   updateLetter,
   deleteLetter,
@@ -390,6 +528,8 @@ module.exports = {
       // Letter indexes
       await db.collection('letters').createIndex({ fromUsername: 1 });
       await db.collection('letters').createIndex({ toUsername: 1 });
+      await db.collection('letters').createIndex({ fromUserId: 1 });
+      await db.collection('letters').createIndex({ toUserId: 1 });
       await db.collection('letters').createIndex({ status: 1 });
       console.log('Database indexes created');
     } catch (error) {

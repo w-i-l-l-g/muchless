@@ -119,6 +119,37 @@ app.post('/api/letters/create', requireAuth, async (req, res) => {
   }
 });
 
+// Get letter endpoint
+app.get('/api/letters/:id', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const username = req.session.username;
+    
+    const { getLetter } = require('./db');
+    const result = await getLetter(id, username);
+    
+    return res.json(result);
+  } catch (error) {
+    console.error('Error getting letter:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Get delivered mail
+app.get('/api/mail/delivered', requireAuth, async (req, res) => {
+  try {
+    const username = req.session.username;
+    
+    const { getDeliveredMail } = require('./db');
+    const result = await getDeliveredMail(username);
+    
+    return res.json(result);
+  } catch (error) {
+    console.error('Error getting delivered mail:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 // Update letter endpoint
 app.put('/api/letters/update/:id', requireAuth, async (req, res) => {
   try {
@@ -132,6 +163,54 @@ app.put('/api/letters/update/:id', requireAuth, async (req, res) => {
     return res.json(result);
   } catch (error) {
     console.error('Error updating letter:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Update letter status endpoint
+app.put('/api/letters/status/:id', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    const username = req.session.username;
+    
+    console.log('Status update request:', { username, letterId: id, status });
+    
+    const { updateLetter } = require('./db');
+    
+    // If status is being set to 'queued', generate a random delivery date
+    // between 1 and 7 days in the future
+    let updates = { status };
+    
+    if (status === 'queued') {
+      // Constants for time calculations
+      const SECONDS_PER_DAY = 24 * 60 * 60;
+      const MIN_DAYS = 1;
+      const MAX_DAYS = 7;
+      
+      // Calculate random seconds between 1-7 days
+      const minSeconds = MIN_DAYS * SECONDS_PER_DAY;
+      const maxSeconds = MAX_DAYS * SECONDS_PER_DAY;
+      const deliverySeconds = Math.floor(Math.random() * (maxSeconds - minSeconds + 1)) + minSeconds;
+      
+      // Calculate equivalent days for display purposes
+      const deliveryDays = Math.ceil(deliverySeconds / SECONDS_PER_DAY);
+      
+      // Create delivery date by adding random seconds to current date
+      const now = new Date();
+      const deliveryDate = new Date(now.getTime() + deliverySeconds * 1000);
+      
+      // Add to updates object
+      updates.deliveryDate = deliveryDate;
+      updates.deliveryDays = deliveryDays;
+      updates.deliverySeconds = deliverySeconds;
+    }
+    
+    const result = await updateLetter(id, username, updates);
+    
+    return res.json(result);
+  } catch (error) {
+    console.error('Error updating letter status:', error);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 });
@@ -205,6 +284,38 @@ app.get('/api/notes', requireAuth, async (req, res) => {
       success: false, 
       message: 'Error retrieving notes',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// API endpoint to get a single note
+app.get('/api/notes/:id', requireAuth, async (req, res) => {
+  try {
+    const noteId = req.params.id;
+    
+    console.log('Retrieving note:', noteId, 'for user:', req.session.username);
+    
+    const { getNote } = require('./db');
+    const result = await getNote(req.session.username, noteId);
+    
+    if (result.success) {
+      return res.json(result);
+    } else {
+      return res.status(404).json({
+        success: false,
+        message: result.message || 'Note not found'
+      });
+    }
+  } catch (error) {
+    console.error('Error in /api/notes GET:', {
+      error: error.message,
+      stack: error.stack,
+      noteId: req.params.id,
+      session: req.session
+    });
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Server error retrieving note' 
     });
   }
 });
@@ -655,15 +766,13 @@ app.post('/logout', (req, res) => {
 
 // Jot Pad route
 // Letterbox route
-app.get('/letterbox', requireAuth, (req, res) => {
-  // Mock data for now - will be replaced with real data
-  const mockEmails = Array.from({length: 25}, (_, i) => ({
-    id: i + 1,
-    from: 'user' + (i % 5 + 1) + '@example.com',
-    date: new Date(Date.now() - i * 3600000).toLocaleDateString(),
-    read: i > 2 // First 3 emails will be unread
-  }));
-
+app.get('/letterbox', requireAuth, async (req, res) => {
+  // Fetch initial letters data - the rest will be loaded via client API
+  const { getDeliveredMail } = require('./db');
+  const username = req.session.username;
+  const result = await getDeliveredMail(username);
+  const letters = result.success ? result.letters : [];
+  
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -768,10 +877,10 @@ app.get('/letterbox', requireAuth, (req, res) => {
   </div>
   
   <ul class="email-list" id="emailList">
-    ${mockEmails.map(email => 
-      '<li class="email-item" data-id="' + email.id + '">' +
-      '<div class="email-from">' + email.from + '</div>' +
-      '<div class="email-date">' + email.date + '</div>' +
+    ${letters.map(letter => 
+      '<li class="email-item" data-id="' + letter._id + '">' +
+      '<div class="email-from">' + (letter.fromName || letter.fromUsername) + '</div>' +
+      '<div class="email-date">' + new Date(letter.deliveredAt || letter.updatedAt).toLocaleDateString() + '</div>' +
       '</li>'
     ).join('')}
   </ul>
@@ -784,16 +893,16 @@ app.get('/letterbox', requireAuth, (req, res) => {
   
   
   <script>
-    // Simple pagination
+    // Handle mail data
     let currentPage = 1;
     const itemsPerPage = 10;
     const emailItems = document.querySelectorAll('.email-item');
-    const totalPages = Math.ceil(emailItems.length / itemsPerPage);
+    const totalPages = Math.max(1, Math.ceil(emailItems.length / itemsPerPage));
     
     function updatePagination() {
       document.getElementById('pageInfo').textContent = 'Page ' + currentPage + ' of ' + totalPages;
       document.getElementById('prevPage').disabled = currentPage === 1;
-      document.getElementById('nextPage').disabled = currentPage === totalPages;
+      document.getElementById('nextPage').disabled = currentPage === totalPages || emailItems.length === 0;
       
       const startIdx = (currentPage - 1) * itemsPerPage;
       const endIdx = startIdx + itemsPerPage;
@@ -803,7 +912,7 @@ app.get('/letterbox', requireAuth, (req, res) => {
       });
     }
     
-    // Event listeners
+    // Event listeners for pagination
     document.getElementById('prevPage').addEventListener('click', () => {
       if (currentPage > 1) {
         currentPage--;
@@ -818,31 +927,156 @@ app.get('/letterbox', requireAuth, (req, res) => {
       }
     });
     
-    // Email click handler
-    document.querySelectorAll('.email-item').forEach(item => {
-      item.addEventListener('click', () => {
-        const emailId = item.getAttribute('data-id');
-        // Will be implemented later
-        console.log('Viewing email:', emailId);
+    // Handle email item clicks to view mail content
+    emailItems.forEach(item => {
+      item.addEventListener('click', async () => {
+        const id = item.getAttribute('data-id');
+        try {
+          const response = await fetch('/api/letters/' + id);
+          const result = await response.json();
+          
+          if (result.success && result.letter) {
+            // Navigate to a read view
+            window.location.href = '/read?id=' + id;
+          } else {
+            console.error('Error fetching letter:', result.message);
+          }
+        } catch (error) {
+          console.error('Error fetching letter:', error);
+        }
       });
     });
     
-    // Compose button - navigate to compose screen
-    document.getElementById('composeBtn').addEventListener('click', () => {
+    // Button event handlers
+    document.getElementById('draftsBtn').addEventListener('click', () => {
       window.location.href = '/compose';
     });
     
-    // Drafts button
-    document.getElementById('draftsBtn').addEventListener('click', () => {
-      // Will be implemented later
-      console.log('View drafts');
+    document.getElementById('composeBtn').addEventListener('click', () => {
+      window.location.href = '/compose/editor';
     });
     
-    // Initialize
+    // Initialize pagination
     updatePagination();
   </script>
 </body>
 </html>`);
+});
+
+// Read mail route
+app.get('/read', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.query;
+    if (!id) {
+      return res.redirect('/letterbox');
+    }
+    
+    const username = req.session.username;
+    const { getLetter } = require('./db');
+    const result = await getLetter(id, username);
+    
+    if (!result.success || !result.letter) {
+      return res.redirect('/letterbox');
+    }
+    
+    const letter = result.letter;
+    
+    // Check if the user is the recipient
+    if (letter.toUsername !== username) {
+      return res.redirect('/letterbox');
+    }
+    
+    res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Read Letter</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: serif;
+    }
+    
+    body {
+      background: white;
+      color: black;
+      max-width: 100%;
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .header {
+      display: flex;
+      justify-content: space-between;
+      padding: 15px 20px;
+      background: white;
+      border-bottom: 1px solid #eee;
+    }
+    
+    .btn {
+      padding: 8px 12px;
+      margin-left: 10px;
+      background: white;
+      border: 1px solid #333;
+      border-radius: 15px;
+      cursor: pointer;
+      font-size: 14px;
+      text-decoration: none;
+      color: black;
+    }
+    
+    .letter-container {
+      padding: 20px;
+      flex: 1;
+      overflow-y: auto;
+    }
+    
+    .letter-info {
+      margin-bottom: 20px;
+    }
+    
+    .letter-from, .letter-date {
+      margin-bottom: 5px;
+      font-size: 16px;
+    }
+    
+    .letter-content {
+      white-space: pre-wrap;
+      line-height: 1.6;
+      font-size: 18px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <a href="/letterbox" class="btn">Back</a>
+  </div>
+  
+  <div class="letter-container">
+    <div class="letter-info">
+      <div class="letter-from"><strong>From:</strong> ${letter.fromName || letter.fromUsername}</div>
+      <div class="letter-date"><strong>Received:</strong> ${new Date(letter.deliveredAt || letter.updatedAt).toLocaleString()}</div>
+    </div>
+    
+    <div class="letter-content">${letter.content || ''}</div>
+  </div>
+  
+  <script>
+    // Mark letter as read if needed
+    // This could be done with an API call if we add a read status to letters
+  </script>
+</body>
+</html>`);
+  } catch (error) {
+    console.error('Error rendering letter:', error);
+    res.redirect('/letterbox');
+  }
 });
 
 // Compose email route
@@ -1087,7 +1321,7 @@ app.get('/compose/editor', requireAuth, (req, res) => {
 </head>
 <body>
     <div class="controls">
-        <a href="/compose" class="btn" style="text-decoration: none; color: black; display: flex; align-items: center; justify-content: center; padding: 0;">←</a>
+        <a href="/letterbox" class="btn" style="text-decoration: none; color: black; display: flex; align-items: center; justify-content: center; padding: 0;">←</a>
         <button class="btn" onclick="changeFontSize(3)">+</button>
         <button class="btn" onclick="changeFontSize(-3)">-</button>
         <button class="btn" onclick="hideKeyboard()">⌨</button>
@@ -1106,10 +1340,12 @@ app.get('/compose/editor', requireAuth, (req, res) => {
     <script>
         let fontSize = 19;
         const textarea = document.getElementById('notes');
-        // Per-note storage keys based on route param
-        const NOTE_ID = ${JSON.stringify(typeof req.params.id === 'string' ? req.params.id : '')};
-        const contentKey = 'note:' + NOTE_ID + ':content';
-        const fontKey = 'note:' + NOTE_ID + ':fontSize';
+        // Get letter ID from URL parameter
+        const urlParams = new URLSearchParams(window.location.search);
+        const LETTER_ID = urlParams.get('letterId');
+        // Local storage keys
+        const fontKey = 'letter:fontSize';
+        const draftKey = LETTER_ID ? 'letter:' + LETTER_ID + ':content' : null;
         
         function changeFontSize(delta) {
             fontSize += delta;
@@ -1131,28 +1367,117 @@ app.get('/compose/editor', requireAuth, (req, res) => {
             textarea.value = textBefore + ',' + textAfter;
             textarea.setSelectionRange(cursorPos + 1, cursorPos + 1);
             textarea.focus();
-            localStorage.setItem('emailDraft', textarea.value);
+            saveDraft();
         }
         
-        // Show comma button when typing
+        // Show comma button when typing and debounced save
+        let saveTimeout = null;
+        
+        // Save the draft content to server
+        function saveDraft() {
+            if (!LETTER_ID) return;
+            
+            
+            // Save to localStorage first as a reliable backup
+            if (draftKey) {
+                try {
+                    localStorage.setItem(draftKey, textarea.value);
+                } catch (error) {
+                    console.error('Error saving to localStorage on input:', error);
+                }
+            }
+            
+            // Use XMLHttpRequest for better browser compatibility
+            try {
+                var xhr = new XMLHttpRequest();
+                xhr.open('PUT', '/api/letters/update/' + LETTER_ID, true);
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                
+                xhr.onload = function() {
+                    if (this.status >= 200 && this.status < 300) {
+                        try {
+                            var result = JSON.parse(xhr.responseText);
+                            if (result.success) {
+                                // Saved successfully
+                            } else {
+                                console.error('Error saving draft:', result.message);
+                            }
+                        } catch (e) {
+                            console.error('Failed to parse response:', e);
+                        }
+                    } else {
+                        console.error('Request failed with status:', this.status);
+                    }
+                };
+                
+                xhr.onerror = function() {
+                    console.error('Network error occurred');
+                };
+                
+                xhr.send(JSON.stringify({
+                    content: textarea.value
+                }));
+            } catch (error) {
+                console.error('Error in XMLHttpRequest setup:', error);
+            }
+        }
+        
+        // Show comma button when typing and debounced save
         textarea.addEventListener('input', function() {
             document.getElementById('commaBtn').style.display = 'block';
-            localStorage.setItem('emailDraft', this.value);
+            
+            // Save to localStorage immediately if we have a letter ID
+            if (draftKey) {
+                try {
+                    localStorage.setItem(draftKey, this.value);
+                } catch (error) {
+                    console.error('Error saving to localStorage on input:', error);
+                }
+            }
+            
+            // Debounced server save
+            if (saveTimeout) clearTimeout(saveTimeout);
+            saveTimeout = setTimeout(() => saveDraft(), 1000);
         });
         
-        // Initialize
-        const savedNotes = localStorage.getItem('emailDraft');
-        if (savedNotes) {
-            textarea.value = savedNotes;
+        // Initialize - load content from server if letterId is available
+        async function loadLetterContent() {
+            if (LETTER_ID) {
+                try {
+                    const response = await fetch('/api/letters/' + LETTER_ID);
+                    const result = await response.json();
+                    
+                    if (result.success && result.letter && result.letter.content) {
+                        textarea.value = result.letter.content;
+                        return;
+                    } else if (!result.success) {
+                        const errorMsg = 'Failed to load letter: ' + (result.message || 'Unknown error');
+                        console.error(errorMsg);
+                    }
+                } catch (error) {
+                    const errorMsg = 'Error loading letter content: ' + (error.message || error);
+                    console.error(errorMsg);
+                }
+            }
+            
+            // Fallback to localStorage only if we have a letter ID
+            if (draftKey) {
+                const savedNotes = localStorage.getItem(draftKey);
+                if (savedNotes) {
+                    textarea.value = savedNotes;
+                }
+            }
         }
         
-        const savedFontSize = localStorage.getItem('fontSize');
+        // Load font size from localStorage
+        const savedFontSize = localStorage.getItem(fontKey);
         if (savedFontSize) {
             fontSize = parseInt(savedFontSize);
-            textarea.style.fontSize = fontSize + 'px';
-        } else {
-            textarea.style.fontSize = fontSize + 'px';
         }
+        textarea.style.fontSize = fontSize + 'px';
+        
+        // Load content from server
+        loadLetterContent();
         
         // Handle keyboard show/hide on mobile
         textarea.addEventListener('focus', function() {
@@ -1167,8 +1492,7 @@ app.get('/compose/editor', requireAuth, (req, res) => {
             }, 200);
         });
         
-        // Get URL parameters
-        const urlParams = new URLSearchParams(window.location.search);
+        // Get recipient from URL parameters
         const recipient = urlParams.get('to') || '';
         const sendPopup = document.getElementById('sendPopup');
         const recipientDisplay = document.getElementById('recipientDisplay');
@@ -1191,46 +1515,140 @@ app.get('/compose/editor', requireAuth, (req, res) => {
             }
         };
         
-        // Send email function
-        window.sendEmail = async function() {
-            const content = textarea.value.trim();
-            if (!content) {
-                alert('Please write something before sending');
-                return;
-            }
-            
-            try {
-                // Get the letter ID from URL params
-                const urlParams = new URLSearchParams(window.location.search);
-                const letterId = urlParams.get('letterId');
-                
-                if (letterId) {
-                    // Update the draft letter with content
-                    const url = '/api/letters/update/' + letterId;
-                    const updateResponse = await fetch(url, {
-                        method: 'PUT',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            content: content
-                        })
-                    });
+        // Helper function for making HTTP requests with XMLHttpRequest (more compatible with older browsers)
+        function makeRequest(method, url, data) {
+            return new Promise(function(resolve, reject) {
+                try {
+                    var xhr = new XMLHttpRequest();
+                    xhr.open(method, url, true);
+                    xhr.setRequestHeader('Content-Type', 'application/json');
                     
-                    const updateResult = await updateResponse.json();
-                    if (!updateResult.success) {
-                        console.error('Failed to update letter:', updateResult.message);
-                    }
+                    xhr.onload = function() {
+                        if (this.status >= 200 && this.status < 300) {
+                            try {
+                                var response = JSON.parse(xhr.responseText);
+                                resolve(response);
+                            } catch (e) {
+                                console.error('Response parse error: ' + e);
+                                reject(new Error('Failed to parse response: ' + e));
+                            }
+                        } else {
+                            console.error('Request failed with status: ' + this.status);
+                            reject(new Error('Request failed with status: ' + this.status));
+                        }
+                    };
+                    
+                    xhr.onerror = function() {
+                        console.error('Network error occurred');
+                        reject(new Error('Network error occurred'));
+                    };
+                    
+                    xhr.send(data ? JSON.stringify(data) : null);
+                } catch (e) {
+                    console.error('Request setup failed: ' + e);
+                    reject(new Error('Request setup failed: ' + e));
+                }
+            });
+        }
+        
+        // Send email function
+        window.sendEmail = function() {
+            try {
+                var content = textarea.value.trim();
+                if (!content) {
+                    console.error('Please write something before sending');
+                    return;
                 }
                 
-                // Clear the draft and go back to letterbox
-                localStorage.removeItem('emailDraft');
-                window.location.href = '/letterbox';
-            } catch (error) {
-                console.error('Error updating letter:', error);
-                // Even if update fails, still navigate back
-                localStorage.removeItem('emailDraft');
-                window.location.href = '/letterbox';
+                if (!LETTER_ID) {
+                    console.error('Error: No letter ID found');
+                    return;
+                }
+                
+                // First update the content
+                var updateUrl = '/api/letters/update/' + LETTER_ID;
+                
+                makeRequest('PUT', updateUrl, { content: content })
+                    .then(function(updateResult) {
+                        if (!updateResult.success) {
+                            throw new Error('Failed to update letter: ' + (updateResult.message || 'Unknown error'));
+                        }
+                        
+                        // Debug the status issue with explicit values
+                        var statusUrl = '/api/letters/status/' + LETTER_ID;
+                        
+                        // Create a direct XMLHttpRequest for status update
+                        try {
+                            var statusXhr = new XMLHttpRequest();
+                            statusXhr.open('PUT', statusUrl, true);
+                            statusXhr.setRequestHeader('Content-Type', 'application/json');
+                            
+                            statusXhr.onload = function() {
+                                if (this.status >= 200 && this.status < 300) {
+                                    try {
+                                        var statusResult = JSON.parse(statusXhr.responseText);
+                                        if (statusResult.success) {
+                                            
+                                            // Clear localStorage
+                                            if (draftKey) {
+                                                try {
+                                                    localStorage.removeItem(draftKey);
+                                                } catch (e) {
+                                                    console.error('Failed to clear localStorage:', e);
+                                                }
+                                            }
+                                            
+                                            // Navigate back to letterbox
+                                            window.location.href = '/letterbox';
+                                        } else {
+                                            console.error('Status update failed: ' + (statusResult.message || 'Unknown error'));
+                                        }
+                                    } catch (e) {
+                                        console.error('Failed to parse status response: ' + e);
+                                    }
+                                } else {
+                                    console.error('Status update request failed with status: ' + this.status);
+                                }
+                            };
+                            
+                            statusXhr.onerror = function() {
+                                console.error('Network error during status update');
+                            };
+                            
+                            var statusData = JSON.stringify({ status: 'queued' });
+                            statusXhr.send(statusData);
+                            return { success: true }; // Return something to satisfy Promise chain
+                        } catch (e) {
+                            console.error('Status update setup failed: ' + e);
+                            throw e;
+                        }
+                    })
+                    .then(function(statusResult) {
+                        if (!statusResult.success) {
+                            throw new Error('Failed to queue letter: ' + (statusResult.message || 'Unknown error'));
+                        }
+                        
+                        console.log('Letter sent successfully!');
+                        
+                        // Clear localStorage
+                        if (draftKey) {
+                            try {
+                                localStorage.removeItem(draftKey);
+                            } catch (e) {
+                                console.error('Failed to clear localStorage:', e);
+                            }
+                        }
+                        
+                        // Navigate back to letterbox
+                        setTimeout(function() {
+                            window.location.href = '/letterbox';
+                        }, 500);
+                    })
+                    .catch(function(error) {
+                        console.error('Send error:', error);
+                    });
+            } catch (e) {
+                console.error('Fatal send error:', e);
             }
         };
         
@@ -1921,7 +2339,7 @@ async function startServer() {
     
     // Start the server
     app.listen(PORT, () => {
-      console.log(`Server is running on http://localhost:${PORT}`);
+      console.log('Server is running on http://localhost:' + PORT);
     });
   } catch (error) {
     console.error('Failed to start server:', error);
@@ -2127,11 +2545,36 @@ app.get('/note/:id', requireAuth, (req, res) => {
             }
         }
         
-        // Load saved notes and font size
-        const saved = localStorage.getItem(contentKey);
-        if (saved) {
-            textarea.value = saved;
+        // Function to load note from database and fall back to localStorage
+        async function loadNoteContent() {
+            try {
+                // First try to get from database
+                const response = await fetch('/api/notes/' + NOTE_ID);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success && data.note && data.note.content) {
+                        textarea.value = data.note.content;
+                        console.log('Note loaded from database');
+                        // Also update localStorage with latest version
+                        localStorage.setItem(contentKey, data.note.content);
+                        return;
+                    }
+                }
+                console.log('Database note not available, falling back to localStorage');
+            } catch (error) {
+                console.error('Error fetching note from database:', error);
+            }
+            
+            // Fallback to localStorage if database fetch fails
+            const saved = localStorage.getItem(contentKey);
+            if (saved) {
+                textarea.value = saved;
+                console.log('Note loaded from localStorage');
+            }
         }
+        
+        // Load the note content
+        loadNoteContent();
         
         const savedFontSize = localStorage.getItem(fontKey);
         if (savedFontSize) {
