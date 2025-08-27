@@ -98,6 +98,44 @@ app.get('/api/user/exists/:username', requireAuth, async (req, res) => {
   }
 });
 
+// Letter creation endpoint - simplified for draft creation
+app.post('/api/letters/create', requireAuth, async (req, res) => {
+  try {
+    const { to, content } = req.body;
+    const fromUsername = req.session.username;
+    
+    if (!to) {
+      return res.status(400).json({ success: false, message: 'Recipient username is required' });
+    }
+    
+    // Create letter in draft state
+    const { createLetter } = require('./db');
+    const result = await createLetter(fromUsername, to, content || '');
+    
+    return res.json(result);
+  } catch (error) {
+    console.error('Error creating letter:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Update letter endpoint
+app.put('/api/letters/update/:id', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { content } = req.body;
+    const username = req.session.username;
+    
+    const { updateLetter } = require('./db');
+    const result = await updateLetter(id, username, { content });
+    
+    return res.json(result);
+  } catch (error) {
+    console.error('Error updating letter:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 app.post('/api/notes', requireAuth, async (req, res) => {
   try {
     console.log('Received note creation request:', {
@@ -919,19 +957,38 @@ app.get('/compose', requireAuth, (req, res) => {
       }
       
       try {
-        // Check if user exists before redirecting
+        // Check if user exists before creating letter
         const response = await fetch('/api/user/exists/' + encodeURIComponent(to));
         const data = await response.json();
         
         if (data.success && data.exists) {
-          // User exists, proceed to editor
-          window.location.href = '/compose/editor?to=' + encodeURIComponent(data.username || to);
+          // User exists, create a draft letter
+          const createResponse = await fetch('/api/letters/create', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              to: data.username || to,
+              content: '' // Empty content for draft
+            })
+          });
+          
+          const result = await createResponse.json();
+          if (result.success) {
+            // Proceed to editor with letter ID
+            window.location.href = '/compose/editor?to=' + encodeURIComponent(data.username || to) + '&letterId=' + result.letterId;
+          } else {
+            console.error('Failed to create letter:', result.message);
+            // If letter creation fails, still allow proceeding to editor without letterId
+            window.location.href = '/compose/editor?to=' + encodeURIComponent(data.username || to);
+          }
         } else {
           // User doesn't exist, show warning
           warningEl.style.display = 'block';
         }
       } catch (error) {
-        console.error('Error checking username:', error);
+        console.error('Error in write flow:', error);
         // On error, allow proceeding anyway
         window.location.href = '/compose/editor?to=' + encodeURIComponent(to);
       }
@@ -1135,10 +1192,46 @@ app.get('/compose/editor', requireAuth, (req, res) => {
         };
         
         // Send email function
-        window.sendEmail = function() {
-            // For now, just clear the editor and go back to letterbox
-            localStorage.removeItem('emailDraft');
-            window.location.href = '/letterbox';
+        window.sendEmail = async function() {
+            const content = textarea.value.trim();
+            if (!content) {
+                alert('Please write something before sending');
+                return;
+            }
+            
+            try {
+                // Get the letter ID from URL params
+                const urlParams = new URLSearchParams(window.location.search);
+                const letterId = urlParams.get('letterId');
+                
+                if (letterId) {
+                    // Update the draft letter with content
+                    const url = '/api/letters/update/' + letterId;
+                    const updateResponse = await fetch(url, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            content: content
+                        })
+                    });
+                    
+                    const updateResult = await updateResponse.json();
+                    if (!updateResult.success) {
+                        console.error('Failed to update letter:', updateResult.message);
+                    }
+                }
+                
+                // Clear the draft and go back to letterbox
+                localStorage.removeItem('emailDraft');
+                window.location.href = '/letterbox';
+            } catch (error) {
+                console.error('Error updating letter:', error);
+                // Even if update fails, still navigate back
+                localStorage.removeItem('emailDraft');
+                window.location.href = '/letterbox';
+            }
         };
         
         // Close popup when clicking outside

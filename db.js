@@ -115,12 +115,11 @@ async function createNote(username, noteName) {
     }
     
     console.log('Creating note in separate collection');
-    // username_lc is already declared above
+    // Create note with userId reference but no username_lc duplication
     const note = {
       _id: new ObjectId(),
       userId: user._id,
-      username: username,
-      username_lc: username_lc,
+      username: username, // Keep original username for simpler queries
       name: noteName,
       content: '',
       createdAt: new Date(),
@@ -229,6 +228,142 @@ async function checkUserExists(username) {
   }
 }
 
+/**
+ * Letter data type functions
+ */
+
+async function createLetter(fromUsername, toUsername, content, status = 'draft') {
+  try {
+    const db = await connectToDatabase();
+    const letters = db.collection('letters');
+    
+    // Get user IDs
+    const users = db.collection('users');
+    const fromUser = await users.findOne({ username_lc: fromUsername.toLowerCase() });
+    const toUser = await users.findOne({ username_lc: toUsername.toLowerCase() });
+    
+    if (!fromUser || !toUser) {
+      return { success: false, message: 'One or both users not found' };
+    }
+    
+    const letter = {
+      _id: new ObjectId(),
+      fromUserId: fromUser._id,
+      fromUsername: fromUser.username,
+      toUserId: toUser._id,
+      toUsername: toUser.username,
+      content,
+      status, // draft, queued, delivered
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      sentAt: null,
+      deliveredAt: null
+    };
+    
+    const result = await letters.insertOne(letter);
+    return { success: true, letterId: letter._id };
+  } catch (error) {
+    console.error('Error creating letter:', error);
+    return { success: false, message: 'Database error' };
+  }
+}
+
+async function getLettersByStatus(username, status) {
+  try {
+    const db = await connectToDatabase();
+    const letters = db.collection('letters');
+    
+    const query = status === 'received' 
+      ? { toUsername: username, status: 'delivered' } 
+      : { fromUsername: username, status };
+    
+    const results = await letters.find(query).toArray();
+    return { success: true, letters: results };
+  } catch (error) {
+    console.error(`Error getting ${status} letters:`, error);
+    return { success: false, message: 'Database error' };
+  }
+}
+
+async function getLetter(letterId, username) {
+  try {
+    const db = await connectToDatabase();
+    const letters = db.collection('letters');
+    
+    const letter = await letters.findOne({ _id: new ObjectId(letterId) });
+    
+    if (!letter) {
+      return { success: false, message: 'Letter not found' };
+    }
+    
+    // Access control - user must be sender or recipient
+    if (letter.fromUsername !== username && letter.toUsername !== username) {
+      return { success: false, message: 'Access denied' };
+    }
+    
+    return { success: true, letter };
+  } catch (error) {
+    console.error('Error getting letter:', error);
+    return { success: false, message: 'Database error' };
+  }
+}
+
+async function updateLetter(letterId, username, updates) {
+  try {
+    const db = await connectToDatabase();
+    const letters = db.collection('letters');
+    
+    // Verify the letter exists and belongs to this user
+    const letter = await letters.findOne({
+      _id: new ObjectId(letterId),
+      fromUsername: username,
+      status: 'draft' // Can only update drafts
+    });
+    
+    if (!letter) {
+      return { success: false, message: 'Letter not found or cannot be updated' };
+    }
+    
+    // Apply updates
+    const updateFields = { ...updates, updatedAt: new Date() };
+    
+    const result = await letters.updateOne(
+      { _id: new ObjectId(letterId) },
+      { $set: updateFields }
+    );
+    
+    return { success: true, modified: result.modifiedCount > 0 };
+  } catch (error) {
+    console.error('Error updating letter:', error);
+    return { success: false, message: 'Database error' };
+  }
+}
+
+async function deleteLetter(letterId, username) {
+  try {
+    const db = await connectToDatabase();
+    const letters = db.collection('letters');
+    
+    // Verify the letter exists and belongs to this user
+    const letter = await letters.findOne({
+      _id: new ObjectId(letterId),
+      fromUsername: username,
+      status: 'draft' // Can only delete drafts
+    });
+    
+    if (!letter) {
+      return { success: false, message: 'Letter not found or cannot be deleted' };
+    }
+    
+    const result = await letters.deleteOne({ _id: new ObjectId(letterId) });
+    
+    return { success: true, deleted: result.deletedCount > 0 };
+  } catch (error) {
+    console.error('Error deleting letter:', error);
+    return { success: false, message: 'Database error' };
+  }
+}
+
 module.exports = {
   connectToDatabase,
   saveUser,
@@ -236,6 +371,13 @@ module.exports = {
   getUserNotes,
   updateNote,
   checkUserExists,
+  
+  // Letter functions
+  createLetter,
+  getLettersByStatus,
+  getLetter,
+  updateLetter,
+  deleteLetter,
   // Add index for faster lookups
   async createIndexes() {
     try {
@@ -243,8 +385,12 @@ module.exports = {
       await db.collection('users').createIndex({ username_lc: 1 }, { unique: true });
       await db.collection('users').createIndex({ email_lc: 1 });
       await db.collection('notes').createIndex({ username: 1 });
-      await db.collection('notes').createIndex({ username_lc: 1 }, { unique: true });
       await db.collection('notes').createIndex({ userId: 1 });
+      
+      // Letter indexes
+      await db.collection('letters').createIndex({ fromUsername: 1 });
+      await db.collection('letters').createIndex({ toUsername: 1 });
+      await db.collection('letters').createIndex({ status: 1 });
       console.log('Database indexes created');
     } catch (error) {
       console.error('Error creating indexes:', error);
