@@ -59,18 +59,24 @@ async function saveUser(username, email) {
     const db = await connectToDatabase();
     const users = db.collection('users');
     
-    // Check if user already exists
-    const existingUser = await users.findOne({ username });
+    // Create lowercase versions for case-insensitive lookups
+    const username_lc = username.toLowerCase();
+    const email_lc = email.toLowerCase();
+    
+    // Check if user already exists - using the lowercase username for comparison
+    const existingUser = await users.findOne({ username_lc });
     console.log('Existing user check:', existingUser ? 'User exists' : 'No existing user');
     
     if (existingUser) {
       return { success: false, message: 'User already exists' };
     }
     
-    // Create new user
+    // Create new user with both original and lowercase fields
     const userData = {
       username,
+      username_lc,
       email,
+      email_lc,
       createdAt: new Date(),
       notes: []
     };
@@ -99,8 +105,9 @@ async function createNote(username, noteName) {
     const users = db.collection('users');
     const notes = db.collection('notes');
     
-    // Check if user exists first
-    const user = await users.findOne({ username });
+    // Check if user exists first - using lowercase username for lookup
+    const username_lc = username.toLowerCase();
+    const user = await users.findOne({ username_lc });
     console.log('User lookup result:', user ? 'User found' : 'User not found');
     
     if (!user) {
@@ -108,10 +115,12 @@ async function createNote(username, noteName) {
     }
     
     console.log('Creating note in separate collection');
+    // username_lc is already declared above
     const note = {
       _id: new ObjectId(),
       userId: user._id,
       username: username,
+      username_lc: username_lc,
       name: noteName,
       content: '',
       createdAt: new Date(),
@@ -145,7 +154,8 @@ async function getUserNotes(username) {
     const db = await connectToDatabase();
     const notes = db.collection('notes');
     
-    // Find all notes for this user, sorted by creation date (newest first)
+    // Use the original username for notes lookup since notes still use the original username
+    // This will need to be updated if we update all notes to also use username_lc
     const userNotes = await notes.find(
       { username },
       { 
@@ -168,6 +178,7 @@ async function updateNote(username, noteId, content) {
     const notes = db.collection('notes');
     
     // Update the note content and updatedAt timestamp
+    // Still using original username for notes lookup until we update note creation
     const result = await notes.updateOne(
       { 
         _id: new ObjectId(noteId), 
@@ -196,17 +207,43 @@ async function updateNote(username, noteId, content) {
   }
 }
 
+async function checkUserExists(username) {
+  try {
+    const db = await connectToDatabase();
+    const users = db.collection('users');
+    
+    // Convert input to lowercase for case-insensitive comparison
+    const username_lc = username.toLowerCase();
+    
+    // Check if user exists using lowercase username
+    const user = await users.findOne({ username_lc });
+    
+    return { 
+      success: true, 
+      exists: !!user,
+      username: user ? user.username : null // Return original username if found
+    };
+  } catch (error) {
+    console.error('Error checking user existence:', error);
+    return { success: false, message: 'Database error' };
+  }
+}
+
 module.exports = {
   connectToDatabase,
   saveUser,
   createNote,
   getUserNotes,
   updateNote,
+  checkUserExists,
   // Add index for faster lookups
   async createIndexes() {
     try {
       const db = await connectToDatabase();
+      await db.collection('users').createIndex({ username_lc: 1 }, { unique: true });
+      await db.collection('users').createIndex({ email_lc: 1 });
       await db.collection('notes').createIndex({ username: 1 });
+      await db.collection('notes').createIndex({ username_lc: 1 }, { unique: true });
       await db.collection('notes').createIndex({ userId: 1 });
       console.log('Database indexes created');
     } catch (error) {

@@ -79,6 +79,25 @@ app.get('/debug/db', async (req, res) => {
 });
 
 // API Routes
+// Check if username exists (for recipient validation)
+app.get('/api/user/exists/:username', requireAuth, async (req, res) => {
+  try {
+    const { username } = req.params;
+    
+    if (!username || username.trim() === '') {
+      return res.status(400).json({ success: false, message: 'Username is required' });
+    }
+    
+    const { checkUserExists } = require('./db');
+    const result = await checkUserExists(username);
+    
+    return res.json(result);
+  } catch (error) {
+    console.error('Error checking user existence:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 app.post('/api/notes', requireAuth, async (req, res) => {
   try {
     console.log('Received note creation request:', {
@@ -883,17 +902,44 @@ app.get('/compose', requireAuth, (req, res) => {
       <label for="to">To:</label>
       <input type="text" id="to" name="to" autocomplete="off">
       <button class="write-btn" id="writeBtn">Write</button>
+      <div id="usernameWarning" style="color: red; margin-top: 5px; display: none;">User does not exist</div>
     </div>
   </div>
   
   <script>
-    document.getElementById('writeBtn').addEventListener('click', function() {
+    document.getElementById('writeBtn').addEventListener('click', async function(e) {
+      e.preventDefault(); // Prevent default action
       const to = document.getElementById('to').value.trim();
-      if (to) {
-        window.location.href = '/compose/editor?to=' + encodeURIComponent(to);
-      } else {
+      const warningEl = document.getElementById('usernameWarning');
+      
+      if (!to) {
+        // If empty, just continue to editor without recipient
         window.location.href = '/compose/editor';
+        return;
       }
+      
+      try {
+        // Check if user exists before redirecting
+        const response = await fetch('/api/user/exists/' + encodeURIComponent(to));
+        const data = await response.json();
+        
+        if (data.success && data.exists) {
+          // User exists, proceed to editor
+          window.location.href = '/compose/editor?to=' + encodeURIComponent(data.username || to);
+        } else {
+          // User doesn't exist, show warning
+          warningEl.style.display = 'block';
+        }
+      } catch (error) {
+        console.error('Error checking username:', error);
+        // On error, allow proceeding anyway
+        window.location.href = '/compose/editor?to=' + encodeURIComponent(to);
+      }
+    });
+    
+    // Hide warning when user types
+    document.getElementById('to').addEventListener('input', function() {
+      document.getElementById('usernameWarning').style.display = 'none';
     });
   </script>
 </body>
