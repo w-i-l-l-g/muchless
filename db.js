@@ -339,6 +339,37 @@ async function getLettersByStatus(username, status) {
   }
 }
 
+async function getUserDraftLetters(username) {
+  try {
+    const db = await connectToDatabase();
+    const users = db.collection('users');
+    const letters = db.collection('letters');
+    
+    // Get user by username_lc
+    const user = await users.findOne({ username_lc: username.toLowerCase() });
+    
+    if (!user) {
+      return { success: false, message: 'User not found' };
+    }
+    
+    // Query for draft letters with non-empty content
+    const query = { 
+      fromUserId: user._id, 
+      status: 'draft',
+      content: { $ne: '' } // Only get drafts with non-empty content
+    };
+    
+    const results = await letters.find(query)
+      .sort({ updatedAt: -1 }) // Sort by last updated, newest first
+      .toArray();
+      
+    return { success: true, drafts: results };
+  } catch (error) {
+    console.error('Error getting draft letters:', error);
+    return { success: false, message: 'Database error' };
+  }
+}
+
 async function getDeliveredMail(username) {
   try {
     const db = await connectToDatabase();
@@ -502,7 +533,11 @@ async function deleteLetter(letterId, username) {
 
 module.exports = {
   connectToDatabase,
+  
+  // User functions
   saveUser,
+  
+  // Note functions
   createNote,
   getUserNotes,
   getNote,
@@ -512,6 +547,7 @@ module.exports = {
   // Letter functions
   createLetter,
   getLettersByStatus,
+  getUserDraftLetters,
   getDeliveredMail,
   getLetter,
   updateLetter,

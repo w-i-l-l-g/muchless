@@ -150,6 +150,21 @@ app.get('/api/mail/delivered', requireAuth, async (req, res) => {
   }
 });
 
+// Get draft letters
+app.get('/api/mail/drafts', requireAuth, async (req, res) => {
+  try {
+    const username = req.session.username;
+    
+    const { getUserDraftLetters } = require('./db');
+    const result = await getUserDraftLetters(username);
+    
+    return res.json(result);
+  } catch (error) {
+    console.error('Error getting draft letters:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 // Update letter endpoint
 app.put('/api/letters/update/:id', requireAuth, async (req, res) => {
   try {
@@ -867,6 +882,50 @@ app.get('/letterbox', requireAuth, async (req, res) => {
       cursor: default;
     }
     
+    /* Drafts popup styles */
+    .drafts-error {
+      color: #d32f2f;
+      padding: 15px;
+      text-align: center;
+      font-style: italic;
+    }
+    
+    .drafts-empty {
+      padding: 20px;
+      text-align: center;
+      color: #666;
+      font-style: italic;
+    }
+    
+    .draft-item {
+      padding: 15px;
+      border-bottom: 1px solid #eee;
+      cursor: pointer;
+    }
+    
+    .draft-item:hover {
+      background-color: #f8f8f8;
+    }
+    
+    .draft-item:last-child {
+      border-bottom: none;
+    }
+    
+    .draft-recipient {
+      font-weight: bold;
+      margin-bottom: 5px;
+    }
+    
+    .draft-preview {
+      color: #555;
+      margin-bottom: 5px;
+      font-size: 0.9em;
+    }
+    
+    .draft-date {
+      color: #888;
+      font-size: 0.8em;
+    }
   </style>
 </head>
 <body>
@@ -948,8 +1007,134 @@ app.get('/letterbox', requireAuth, async (req, res) => {
     });
     
     // Button event handlers
-    document.getElementById('draftsBtn').addEventListener('click', () => {
-      window.location.href = '/compose';
+    document.getElementById('draftsBtn').addEventListener('click', async () => {
+      // Create overlay that covers the whole screen
+      const overlay = document.createElement('div');
+      overlay.style.position = 'fixed';
+      overlay.style.top = '0';
+      overlay.style.left = '0';
+      overlay.style.width = '100%';
+      overlay.style.height = '100%';
+      overlay.style.zIndex = '1000';
+      overlay.style.display = 'flex';
+      overlay.style.justifyContent = 'center';
+      overlay.style.alignItems = 'flex-start';
+      overlay.style.paddingTop = '100px';
+      
+      // Create popup container
+      const popup = document.createElement('div');
+      popup.style.backgroundColor = 'white';
+      popup.style.border = '2px solid #333';
+      popup.style.borderRadius = '5px';
+      popup.style.padding = '20px';
+      popup.style.width = '90%';
+      popup.style.maxWidth = '500px';
+      popup.style.height = '500px';
+      popup.style.display = 'flex';
+      popup.style.flexDirection = 'column';
+      
+      // Create popup header
+      const header = document.createElement('div');
+      header.style.display = 'flex';
+      header.style.justifyContent = 'space-between';
+      header.style.alignItems = 'center';
+      header.style.marginBottom = '15px';
+      
+      const title = document.createElement('h2');
+      title.textContent = 'Drafts';
+      title.style.margin = '0';
+      
+      const closeButton = document.createElement('button');
+      closeButton.textContent = '×';
+      closeButton.style.background = 'none';
+      closeButton.style.border = 'none';
+      closeButton.style.fontSize = '36px';
+      closeButton.style.cursor = 'pointer';
+      closeButton.style.padding = '0 10px';
+      closeButton.style.lineHeight = '36px';
+      closeButton.addEventListener('click', () => {
+        document.body.removeChild(overlay);
+      });
+      
+      header.appendChild(title);
+      header.appendChild(closeButton);
+      
+      // Create drafts list container
+      const draftsList = document.createElement('div');
+      draftsList.style.overflowY = 'auto';
+      draftsList.style.flexGrow = '1';
+      
+      // Add components to popup
+      popup.appendChild(header);
+      popup.appendChild(draftsList);
+      
+      // Add popup to overlay and overlay to body
+      overlay.appendChild(popup);
+      document.body.appendChild(overlay);
+      
+      // Fetch drafts from API
+      try {
+        const response = await fetch('/api/mail/drafts');
+        const data = await response.json();
+        
+        if (!data.success) {
+          draftsList.innerHTML = '<div class="drafts-error">Error: ' + (data.message || 'Could not load drafts') + '</div>';
+          return;
+        }
+        
+        if (!data.drafts || data.drafts.length === 0) {
+          draftsList.innerHTML = '<div class="drafts-empty">No drafts found</div>';
+          return;
+        }
+        
+        // Populate drafts list
+        draftsList.innerHTML = '';
+        data.drafts.forEach(draft => {
+          const contentPreview = draft.content.length > 50 
+            ? draft.content.substring(0, 50) + '...' 
+            : draft.content;
+          
+          // Format date
+          const date = new Date(draft.updatedAt).toLocaleString();
+          
+          // Create draft item
+          const draftItem = document.createElement('div');
+          draftItem.className = 'draft-item';
+          
+          // Create header row with recipient and preview on same line
+          const headerRow = document.createElement('div');
+          headerRow.className = 'draft-header-row';
+          
+          const recipientSpan = document.createElement('span');
+          recipientSpan.className = 'draft-recipient';
+          recipientSpan.textContent = draft.toUsername;
+          
+          const previewSpan = document.createElement('span');
+          previewSpan.className = 'draft-preview';
+          previewSpan.textContent = ': ' + contentPreview;
+          
+          headerRow.appendChild(recipientSpan);
+          headerRow.appendChild(previewSpan);
+          
+          // Date remains on its own line
+          const dateDiv = document.createElement('div');
+          dateDiv.className = 'draft-date';
+          dateDiv.textContent = date;
+          
+          draftItem.appendChild(headerRow);
+          draftItem.appendChild(dateDiv);
+          
+          // Add click event to open draft for editing
+          draftItem.addEventListener('click', () => {
+            window.location.href = '/compose/editor?to=' + draft.toUsername + '&letterId=' + draft._id;
+          });
+          
+          draftsList.appendChild(draftItem);
+        });
+      } catch (error) {
+        console.error('Error fetching drafts:', error);
+        draftsList.innerHTML = '<div class="drafts-error">Error loading drafts</div>';
+      }
     });
     
     document.getElementById('composeBtn').addEventListener('click', () => {
