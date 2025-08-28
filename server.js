@@ -953,7 +953,7 @@ app.get('/letterbox', requireAuth, async (req, res) => {
     });
     
     document.getElementById('composeBtn').addEventListener('click', () => {
-      window.location.href = '/compose/editor';
+      window.location.href = '/compose';
     });
     
     // Initialize pagination
@@ -1982,11 +1982,7 @@ app.get('/notes', requireAuth, (req, res) => {
         // Load notes when page loads
         async function loadNotes() {
             const notesList = document.getElementById('notesList');
-            const loadingIndicator = document.createElement('div');
-            loadingIndicator.className = 'loading';
-            loadingIndicator.textContent = 'Loading notes...';
             notesList.innerHTML = '';
-            notesList.appendChild(loadingIndicator);
             
             try {
                 const apiBaseUrl = '${process.env.API_BASE_URL || 'http://localhost:3001'}';
