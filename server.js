@@ -981,11 +981,6 @@ app.get('/read', requireAuth, async (req, res) => {
     
     const letter = result.letter;
     
-    // Check if the user is the recipient
-    if (letter.toUsername !== username) {
-      return res.redirect('/letterbox');
-    }
-    
     res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1013,22 +1008,54 @@ app.get('/read', requireAuth, async (req, res) => {
     
     .header {
       display: flex;
-      justify-content: space-between;
+      align-items: center;
       padding: 15px 20px;
       background: white;
       border-bottom: 1px solid #eee;
     }
     
     .btn {
-      padding: 8px 12px;
-      margin-left: 10px;
+      width: 40px;
+      height: 40px;
       background: white;
-      border: 1px solid #333;
-      border-radius: 15px;
+      border: 2px solid #333;
+      border-radius: 4px;
       cursor: pointer;
-      font-size: 14px;
+      font-size: 20px;
+      font-weight: bold;
       text-decoration: none;
       color: black;
+    }
+    
+    .btn:active {
+      background: #eee;
+    }
+    
+    .header-info {
+      display: flex;
+      align-items: baseline;
+      margin-left: 25px;
+    }
+    
+    .from-name {
+      font-size: 16px;
+      font-weight: 500;
+    }
+    
+    .date-sent {
+      font-size: 12px;
+      color: #666;
+      margin-left: 12px;
+    }
+    
+    .controls {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      z-index: 10;
     }
     
     .letter-container {
@@ -1038,12 +1065,29 @@ app.get('/read', requireAuth, async (req, res) => {
     }
     
     .letter-info {
-      margin-bottom: 20px;
+      display: flex;
+      justify-content: flex-start;
+      align-items: baseline;
+      margin-top: 10px;
     }
     
-    .letter-from, .letter-date {
-      margin-bottom: 5px;
-      font-size: 16px;
+    .sender {
+      font-size: 22px;
+      font-weight: 500;
+    }
+    
+    .date {
+      font-size: 14px;
+      color: #666;
+      padding-left: 13px;
+    }
+    
+    .letter-divider {
+      height: 1px;
+      background-color: #ddd;
+      border: none;
+      margin: 20px 0 20px 0;
+      width: 100%;
     }
     
     .letter-content {
@@ -1054,20 +1098,56 @@ app.get('/read', requireAuth, async (req, res) => {
   </style>
 </head>
 <body>
-  <div class="header">
-    <a href="/letterbox" class="btn">Back</a>
+  <div class="controls">
+    <a href="/letterbox" class="btn" style="display: flex; align-items: center; justify-content: center;">←</a>
+    <button class="btn" onclick="changeFontSize(3)">+</button>
+    <button class="btn" onclick="changeFontSize(-3)">-</button>
   </div>
   
   <div class="letter-container">
     <div class="letter-info">
-      <div class="letter-from"><strong>From:</strong> ${letter.fromName || letter.fromUsername}</div>
-      <div class="letter-date"><strong>Received:</strong> ${new Date(letter.deliveredAt || letter.updatedAt).toLocaleString()}</div>
+      <span class="sender">${letter.fromName || letter.fromUsername}</span>
+      <span class="date">${new Date(letter.deliveredAt || letter.updatedAt).toLocaleDateString()}</span>
     </div>
-    
+    <hr class="letter-divider">
     <div class="letter-content">${letter.content || ''}</div>
   </div>
   
   <script>
+    // Font size handling
+    let fontSize = 18;
+    const letterContent = document.querySelector('.letter-content');
+    const fontSizeKey = 'letter:read:fontSize';
+    
+    // Try to load saved font size
+    try {
+      const savedFontSize = localStorage.getItem(fontSizeKey);
+      if (savedFontSize) {
+        fontSize = parseInt(savedFontSize, 10);
+      }
+      applyFontSize();
+    } catch (err) {
+      console.error('Error loading font size:', err);
+    }
+    
+    function changeFontSize(delta) {
+      fontSize += delta;
+      if (fontSize < 8) fontSize = 8;
+      if (fontSize > 48) fontSize = 48;
+      
+      try {
+        localStorage.setItem(fontSizeKey, fontSize);
+      } catch (err) {
+        console.error('Error saving font size:', err);
+      }
+      
+      applyFontSize();
+    }
+    
+    function applyFontSize() {
+      letterContent.style.fontSize = fontSize + 'px';
+    }
+    
     // Mark letter as read if needed
     // This could be done with an API call if we add a read status to letters
   </script>
