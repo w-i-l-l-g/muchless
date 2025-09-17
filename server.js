@@ -215,6 +215,9 @@ app.put('/api/letters/status/:id', requireAuth, async (req, res) => {
       const now = new Date();
       const deliveryDate = new Date(now.getTime() + deliverySeconds * 1000);
       
+      // Record the current time as when the letter was sent
+      updates.sentAt = now;
+      
       // Add to updates object
       updates.deliveryDate = deliveryDate;
       updates.deliveryDays = deliveryDays;
@@ -1292,7 +1295,7 @@ app.get('/read', requireAuth, async (req, res) => {
   <div class="letter-container">
     <div class="letter-info">
       <span class="sender">${letter.fromName || letter.fromUsername}</span>
-      <span class="date">${new Date(letter.deliveredAt || letter.updatedAt).toLocaleDateString()}</span>
+      <span class="date">${new Date(letter.sentAt || letter.updatedAt).toLocaleDateString()}</span>
     </div>
     <hr class="letter-divider">
     <div class="letter-content">${letter.content || ''}</div>

@@ -401,12 +401,14 @@ async function getUserDraftLetters(username) {
     for (const letter of results) {
       if (letter.content) {
         try {
+          // Store original content in case decryption fails
+          const originalContent = letter.content;
           letter.content = decrypt(letter.content);
         } catch (decryptError) {
-          console.error('Failed to decrypt letter content:', decryptError);
-          // Set content to empty string to avoid breaking the UI
-          letter.content = '';
-          letter.decryptionError = true;
+          console.error('Failed to decrypt draft letter content:', decryptError);
+          // If decryption fails, assume this is an older, non-encrypted letter
+          // and keep the original content instead of setting it to empty
+          // letter.content remains unchanged (uses the original content)
         }
       }
     }
@@ -457,12 +459,14 @@ async function getDeliveredMail(username) {
     for (const letter of deliveredLetters) {
       if (letter.content) {
         try {
+          // Store original content in case decryption fails
+          const originalContent = letter.content;
           letter.content = decrypt(letter.content);
         } catch (decryptError) {
           console.error('Failed to decrypt delivered letter content:', decryptError);
-          // Set content to empty string to avoid breaking the UI
-          letter.content = '';
-          letter.decryptionError = true;
+          // If decryption fails, assume this is an older, non-encrypted letter
+          // and keep the original content instead of setting it to empty
+          // letter.content remains unchanged (uses the original content)
         }
       }
     }
@@ -501,12 +505,14 @@ async function getLetter(letterId, username) {
     // Decrypt letter content if it exists
     if (letter.content) {
       try {
+        // Store original content in case decryption fails
+        const originalContent = letter.content;
         letter.content = decrypt(letter.content);
       } catch (decryptError) {
         console.error('Failed to decrypt letter content:', decryptError);
-        // Return the letter but with empty content to avoid breaking the application
-        letter.content = '';
-        letter.decryptionError = true;
+        // If decryption fails, assume this is an older, non-encrypted letter
+        // and keep the original content instead of setting it to empty
+        // letter.content remains unchanged (uses the original content)
       }
     }
     
