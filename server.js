@@ -1896,8 +1896,6 @@ app.get('/compose/editor', requireAuth, (req, res) => {
                             throw new Error('Failed to queue letter: ' + (statusResult.message || 'Unknown error'));
                         }
                         
-                        console.log('Letter sent successfully!');
-                        
                         // Clear localStorage
                         if (draftKey) {
                             try {
@@ -2709,8 +2707,6 @@ app.get('/note/:id', requireAuth, (req, res) => {
         const textarea = document.getElementById('notes');
         // Per-note storage keys based on route param
         const NOTE_ID = '${req.params.id.replace(/'/g, "\\'")}';
-        console.log('Note ID:', NOTE_ID);
-        console.log('Content key:', 'note:' + NOTE_ID + ':content');
         const contentKey = 'note:' + NOTE_ID + ':content';
         const localTimestampKey = 'note:' + NOTE_ID + ':timestamp';
         const fontKey = 'note:' + NOTE_ID + ':fontSize';
@@ -2762,7 +2758,6 @@ app.get('/note/:id', requireAuth, (req, res) => {
                         })
                     }).then(response => {
                         if (response.ok) {
-                            console.log('Note saved to database via fetch');
                             // Update timestamp for this successful save
                             const now = Date.now();
                             localStorage.setItem(localTimestampKey, now);
@@ -2809,7 +2804,6 @@ app.get('/note/:id', requireAuth, (req, res) => {
                             try {
                                 const response = JSON.parse(this.responseText);
                                 if (response.success) {
-                                    console.log('Note saved to database via XMLHttpRequest');
                                     // Update timestamp for this successful save
                                     const now = Date.now();
                                     localStorage.setItem(localTimestampKey, now);
@@ -2851,12 +2845,10 @@ app.get('/note/:id', requireAuth, (req, res) => {
         
         // Add online/offline detection
         window.addEventListener('online', function() {
-            console.log('Browser is now online - syncing data');
             syncOfflineChanges();
         });
         
         window.addEventListener('offline', function() {
-            console.log('Browser is now offline - will sync later');
         });
         
         // Function to sync offline changes when back online
@@ -2864,7 +2856,6 @@ app.get('/note/:id', requireAuth, (req, res) => {
             // Only sync if we have content and it was changed while offline
             const content = localStorage.getItem(contentKey);
             if (content) {
-                console.log('Syncing offline changes to database');
                 saveToDatabase(content);
             }
         }
@@ -2906,7 +2897,6 @@ app.get('/note/:id', requireAuth, (req, res) => {
             const localTimestampStr = localStorage.getItem(localTimestampKey);
             if (localTimestampStr) {
                 localTimestamp = parseInt(localTimestampStr);
-                console.log('Local timestamp:', new Date(localTimestamp).toISOString());
             }
             
             try {
@@ -2919,7 +2909,6 @@ app.get('/note/:id', requireAuth, (req, res) => {
                         // Use updatedAt from the database as timestamp
                         if (data.note.updatedAt) {
                             dbTimestamp = new Date(data.note.updatedAt).getTime();
-                            console.log('DB timestamp:', new Date(dbTimestamp).toISOString());
                         }
                     }
                 }
@@ -2931,19 +2920,16 @@ app.get('/note/:id', requireAuth, (req, res) => {
             if (dbContent && localContent) {
                 // Both exist - use the more recent one
                 if (!dbTimestamp || !localTimestamp || localTimestamp > dbTimestamp) {
-                    console.log('Using localStorage version (newer)');
                     textarea.value = localContent;
                     // Sync the local version back to the database since it's newer
                     saveToDatabase(localContent);
                 } else {
-                    console.log('Using database version (newer)');
                     textarea.value = dbContent;
                     // Update localStorage with the database version
                     localStorage.setItem(contentKey, dbContent);
                     localStorage.setItem(localTimestampKey, dbTimestamp);
                 }
             } else if (dbContent) {
-                console.log('Using database version (no local version)');
                 textarea.value = dbContent;
                 // Store in localStorage
                 localStorage.setItem(contentKey, dbContent);
@@ -2951,19 +2937,20 @@ app.get('/note/:id', requireAuth, (req, res) => {
                     localStorage.setItem(localTimestampKey, dbTimestamp);
                 }
             } else if (localContent) {
-                console.log('Using localStorage version (offline mode)');
                 textarea.value = localContent;
                 // Will try to sync back to database when online
                 if (navigator.onLine) {
                     saveToDatabase(localContent);
                 }
             } else {
-                console.log('No saved content found');
             }
         }
         
-        // Load the note content
-        loadNoteContent();
+        // Load note content, then scroll to bottom
+        loadNoteContent().then(() => {
+            console.log(textarea.scrollHeight, textarea.scrollHeight - textarea.clientHeight - 300)
+            textarea.scrollTop = textarea.scrollHeight - textarea.clientHeight - 300
+        });
         
         const savedFontSize = localStorage.getItem(fontKey);
         if (savedFontSize) {
