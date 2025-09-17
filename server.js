@@ -2948,15 +2948,16 @@ app.get('/note/:id', requireAuth, (req, res) => {
         
         // Load note content, then scroll to bottom
         loadNoteContent().then(() => {
-            console.log(textarea.scrollHeight, textarea.scrollHeight - textarea.clientHeight - 300)
             textarea.scrollTop = textarea.scrollHeight - textarea.clientHeight - 300
         });
         
         const savedFontSize = localStorage.getItem(fontKey);
         if (savedFontSize) {
             fontSize = parseInt(savedFontSize);
-            textarea.style.fontSize = fontSize + 'px';
         }
+        
+        // Always explicitly set the font size on load
+        textarea.style.fontSize = fontSize + 'px';
         
         // Focus the textarea on load
         textarea.focus();
