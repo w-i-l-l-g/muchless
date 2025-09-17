@@ -29,6 +29,8 @@ COGNITO_USER_POOL_ID=your_user_pool_id_here
 COGNITO_CLIENT_ID=your_client_id_here
 COGNITO_CLIENT_SECRET=your_client_secret_here  # Optional
 SESSION_SECRET=your_random_session_secret_here
+# Required for encrypted notes and letters - must be exactly 32 characters
+ENCRYPTION_KEY=your-32-char-encryption-key-here
 PORT=3000
 ```
 

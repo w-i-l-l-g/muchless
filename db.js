@@ -1,4 +1,5 @@
 const { MongoClient, ObjectId } = require('mongodb');
+const { encrypt, decrypt } = require('./encryption');
 
 let db = null;
 
@@ -116,12 +117,13 @@ async function createNote(username, noteName) {
     
     console.log('Creating note in separate collection');
     // Create note with userId reference but no username_lc duplication
+    // Initial content is empty so no need to encrypt yet
     const note = {
       _id: new ObjectId(),
       userId: user._id,
       username: username, // Keep original username for simpler queries
-      name: noteName,
-      content: '',
+      name: noteName, // We're not encrypting the note name for searchability
+      content: '', // Will be encrypted when content is added
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -201,6 +203,18 @@ async function getNote(username, noteId) {
       return { success: false, message: 'Note not found or access denied' };
     }
     
+    // Decrypt note content if it exists
+    if (note.content) {
+      try {
+        note.content = decrypt(note.content);
+      } catch (decryptError) {
+        console.error('Failed to decrypt note content:', decryptError);
+        // Return the note but with empty content to avoid breaking the application
+        note.content = '';
+        note.decryptionError = true;
+      }
+    }
+    
     return { success: true, note };
   } catch (error) {
     console.error('Error retrieving note:', error);
@@ -222,6 +236,15 @@ async function updateNote(username, noteId, content) {
       return { success: false, message: 'User not found' };
     }
     
+    // Encrypt the content before storing
+    let encryptedContent;
+    try {
+      encryptedContent = encrypt(content);
+    } catch (encryptError) {
+      console.error('Failed to encrypt note content:', encryptError);
+      return { success: false, message: 'Failed to encrypt note content' };
+    }
+    
     // Use userId for notes lookup instead of raw username
     const result = await notes.updateOne(
       { 
@@ -230,7 +253,7 @@ async function updateNote(username, noteId, content) {
       },
       { 
         $set: { 
-          content: content,
+          content: encryptedContent, // Store encrypted content
           updatedAt: new Date()
         }
       }
@@ -291,13 +314,24 @@ async function createLetter(fromUsername, toUsername, content, status = 'draft')
       return { success: false, message: 'One or both users not found' };
     }
     
+    // Encrypt content if it's not empty
+    let encryptedContent = content;
+    if (content) {
+      try {
+        encryptedContent = encrypt(content);
+      } catch (encryptError) {
+        console.error('Failed to encrypt letter content:', encryptError);
+        return { success: false, message: 'Failed to encrypt letter content' };
+      }
+    }
+    
     const letter = {
       _id: new ObjectId(),
       fromUserId: fromUser._id,
       fromUsername: fromUser.username,
       toUserId: toUser._id,
       toUsername: toUser.username,
-      content,
+      content: encryptedContent, // Store encrypted content
       status, // draft, queued, delivered
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -363,6 +397,20 @@ async function getUserDraftLetters(username) {
       .sort({ updatedAt: -1 }) // Sort by last updated, newest first
       .toArray();
       
+    // Decrypt the content of each letter before returning
+    for (const letter of results) {
+      if (letter.content) {
+        try {
+          letter.content = decrypt(letter.content);
+        } catch (decryptError) {
+          console.error('Failed to decrypt letter content:', decryptError);
+          // Set content to empty string to avoid breaking the UI
+          letter.content = '';
+          letter.decryptionError = true;
+        }
+      }
+    }
+      
     return { success: true, drafts: results };
   } catch (error) {
     console.error('Error getting draft letters:', error);
@@ -405,6 +453,20 @@ async function getDeliveredMail(username) {
       status: 'delivered'
     }).sort({ deliveredAt: -1 }).toArray();
     
+    // Decrypt the content of each delivered letter before returning
+    for (const letter of deliveredLetters) {
+      if (letter.content) {
+        try {
+          letter.content = decrypt(letter.content);
+        } catch (decryptError) {
+          console.error('Failed to decrypt delivered letter content:', decryptError);
+          // Set content to empty string to avoid breaking the UI
+          letter.content = '';
+          letter.decryptionError = true;
+        }
+      }
+    }
+    
     return { success: true, letters: deliveredLetters };
   } catch (error) {
     console.error('Error getting delivered mail:', error);
@@ -434,6 +496,18 @@ async function getLetter(letterId, username) {
     // Access control - user must be sender or recipient
     if (!letter.fromUserId.equals(user._id) && !letter.toUserId.equals(user._id)) {
       return { success: false, message: 'Access denied' };
+    }
+    
+    // Decrypt letter content if it exists
+    if (letter.content) {
+      try {
+        letter.content = decrypt(letter.content);
+      } catch (decryptError) {
+        console.error('Failed to decrypt letter content:', decryptError);
+        // Return the letter but with empty content to avoid breaking the application
+        letter.content = '';
+        letter.decryptionError = true;
+      }
     }
     
     return { success: true, letter };
@@ -479,8 +553,18 @@ async function updateLetter(letterId, username, updates) {
       return { success: false, message: 'Letter access denied - you are not the author' };
     }
     
-    // Apply updates
+    // Create a copy of updates to avoid modifying the original object
     const updateFields = { ...updates, updatedAt: new Date() };
+    
+    // If content is being updated, encrypt it
+    if (updateFields.content !== undefined) {
+      try {
+        updateFields.content = encrypt(updateFields.content);
+      } catch (encryptError) {
+        console.error('Failed to encrypt letter content:', encryptError);
+        return { success: false, message: 'Failed to encrypt letter content' };
+      }
+    }
     
     const result = await letters.updateOne(
       { _id: new ObjectId(letterId) },
