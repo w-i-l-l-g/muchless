@@ -1693,7 +1693,7 @@ app.get('/compose/editor', requireAuth, (req, res) => {
         // Show comma button when typing and debounced save
         textarea.addEventListener('input', function() {
             document.getElementById('commaBtn').style.display = 'block';
-            
+
             // Save to localStorage immediately if we have a letter ID
             if (draftKey) {
                 try {
@@ -1702,12 +1702,12 @@ app.get('/compose/editor', requireAuth, (req, res) => {
                     console.error('Error saving to localStorage on input:', error);
                 }
             }
-            
+
             // Debounced server save
             if (saveTimeout) clearTimeout(saveTimeout);
             saveTimeout = setTimeout(() => saveDraft(), 1000);
         });
-        
+
         // Initialize - load content from server if letterId is available
         async function loadLetterContent() {
             if (LETTER_ID) {
@@ -2374,30 +2374,42 @@ app.get('/jotpad', requireAuth, (req, res) => {
         });
         
         
-        // Simple: snap cursor line to bottom of viewport when typing
+        function getViewportHeight() {
+            return window.visualViewport ? window.visualViewport.height : window.innerHeight;
+        }
+
         function snapToKeyboard() {
             const cursorPosition = textarea.selectionStart;
             const textBeforeCursor = textarea.value.substring(0, cursorPosition);
             const lines = textBeforeCursor.split(/\\n/);
             const currentLine = lines.length;
-            
-            // Calculate how much space we need above to position cursor line at bottom
+
+            const viewportHeight = getViewportHeight();
             const lineHeight = parseInt(getComputedStyle(textarea).lineHeight);
-            const linesNeededToFillScreen = Math.ceil(window.innerHeight / lineHeight);
-            
+            const linesNeededToFillScreen = Math.ceil(viewportHeight / lineHeight);
+
             if (currentLine < linesNeededToFillScreen) {
-                // Add margin-top to push content down so cursor line appears at bottom
-                const marginNeeded = window.innerHeight - (currentLine * lineHeight);
+                const marginNeeded = viewportHeight - (currentLine * lineHeight);
                 textarea.style.marginTop = Math.max(0, marginNeeded) + 'px';
             } else {
-                // Remove margin and use normal scrolling for longer content
                 textarea.style.marginTop = '0px';
                 const cursorY = (currentLine - 1) * lineHeight + 20;
-                const targetY = cursorY - window.innerHeight + lineHeight;
+                const targetY = cursorY - viewportHeight + lineHeight;
                 textarea.scrollTop = targetY;
             }
         }
-        
+
+        var lastViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', function() {
+                var newHeight = window.visualViewport.height;
+                if (newHeight < lastViewportHeight && document.activeElement === textarea) {
+                    snapToKeyboard();
+                }
+                lastViewportHeight = newHeight;
+            });
+        }
+
         // Load saved notes and font size
         const saved = localStorage.getItem('notes');
         if (saved) {
@@ -2549,30 +2561,42 @@ app.get('/jotpad', requireAuth, (req, res) => {
         });
         
         
-        // Simple: snap cursor line to bottom of viewport when typing
+        function getViewportHeight() {
+            return window.visualViewport ? window.visualViewport.height : window.innerHeight;
+        }
+
         function snapToKeyboard() {
             const cursorPosition = textarea.selectionStart;
             const textBeforeCursor = textarea.value.substring(0, cursorPosition);
             const lines = textBeforeCursor.split(/\\n/);
             const currentLine = lines.length;
-            
-            // Calculate how much space we need above to position cursor line at bottom
+
+            const viewportHeight = getViewportHeight();
             const lineHeight = parseInt(getComputedStyle(textarea).lineHeight);
-            const linesNeededToFillScreen = Math.ceil(window.innerHeight / lineHeight);
-            
+            const linesNeededToFillScreen = Math.ceil(viewportHeight / lineHeight);
+
             if (currentLine < linesNeededToFillScreen) {
-                // Add margin-top to push content down so cursor line appears at bottom
-                const marginNeeded = window.innerHeight - (currentLine * lineHeight);
+                const marginNeeded = viewportHeight - (currentLine * lineHeight);
                 textarea.style.marginTop = Math.max(0, marginNeeded) + 'px';
             } else {
-                // Remove margin and use normal scrolling for longer content
                 textarea.style.marginTop = '0px';
                 const cursorY = (currentLine - 1) * lineHeight + 20;
-                const targetY = cursorY - window.innerHeight + lineHeight;
+                const targetY = cursorY - viewportHeight + lineHeight;
                 textarea.scrollTop = targetY;
             }
         }
-        
+
+        var lastViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', function() {
+                var newHeight = window.visualViewport.height;
+                if (newHeight < lastViewportHeight && document.activeElement === textarea) {
+                    snapToKeyboard();
+                }
+                lastViewportHeight = newHeight;
+            });
+        }
+
         // Load saved notes and font size
         const saved = localStorage.getItem('notes');
         if (saved) {
@@ -2861,30 +2885,42 @@ app.get('/note/:id', requireAuth, (req, res) => {
         }
         
         
-        // Simple: snap cursor line to bottom of viewport when typing
+        function getViewportHeight() {
+            return window.visualViewport ? window.visualViewport.height : window.innerHeight;
+        }
+
         function snapToKeyboard() {
             const cursorPosition = textarea.selectionStart;
             const textBeforeCursor = textarea.value.substring(0, cursorPosition);
             const lines = textBeforeCursor.split(/\\n/);
             const currentLine = lines.length;
-            
-            // Calculate how much space we need above to position cursor line at bottom
+
+            const viewportHeight = getViewportHeight();
             const lineHeight = parseInt(getComputedStyle(textarea).lineHeight);
-            const linesNeededToFillScreen = Math.ceil(window.innerHeight / lineHeight);
-            
+            const linesNeededToFillScreen = Math.ceil(viewportHeight / lineHeight);
+
             if (currentLine < linesNeededToFillScreen) {
-                // Add margin-top to push content down so cursor line appears at bottom
-                const marginNeeded = window.innerHeight - (currentLine * lineHeight);
+                const marginNeeded = viewportHeight - (currentLine * lineHeight);
                 textarea.style.marginTop = Math.max(0, marginNeeded) + 'px';
             } else {
-                // Remove margin and use normal scrolling for longer content
                 textarea.style.marginTop = '0px';
                 const cursorY = (currentLine - 1) * lineHeight + 20;
-                const targetY = cursorY - window.innerHeight + lineHeight;
+                const targetY = cursorY - viewportHeight + lineHeight;
                 textarea.scrollTop = targetY;
             }
         }
-        
+
+        var lastViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', function() {
+                var newHeight = window.visualViewport.height;
+                if (newHeight < lastViewportHeight && document.activeElement === textarea) {
+                    snapToKeyboard();
+                }
+                lastViewportHeight = newHeight;
+            });
+        }
+
         // Function to load note from database and localStorage, comparing timestamps
         async function loadNoteContent() {
             let dbContent = null;
